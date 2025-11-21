@@ -204,15 +204,7 @@ const MemoryEdge = memo(MemoryEdgeComponent)
 const RotatingMesh: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const groupRef = useRef<THREE.Group>(null)
-
-  useFrame((_, delta) => {
-    if (groupRef.current) {
-      groupRef.current.rotation.y += delta * 0.1
-    }
-  })
-
-  return <group ref={groupRef}>{children}</group>
+  return <group>{children}</group>
 }
 
 interface SceneProps {
