@@ -1,5 +1,5 @@
-import { profileUpdateService } from '../services/profile-update.service'
-import { logger } from '../utils/logger.util'
+import { profileUpdateService } from '../services/profile/profile-update.service'
+import { logger } from '../utils/core/logger.util'
 
 const noMemoriesCooldown = new Map<string, number>()
 const getCooldownMs = () =>

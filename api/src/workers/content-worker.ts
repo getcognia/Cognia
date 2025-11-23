@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq'
 import { ContentJobData, getContentJobCancellationKey } from '../lib/queue.lib'
-import { memoryMeshService } from '../services/memory-mesh.service'
-import { profileUpdateService } from '../services/profile-update.service'
+import { memoryMeshService } from '../services/memory/memory-mesh.service'
+import { profileUpdateService } from '../services/profile/profile-update.service'
 import { prisma } from '../lib/prisma.lib'
 import {
   getQueueConcurrency,
@@ -9,10 +9,10 @@ import {
   getQueueLimiter,
   getQueueStalledInterval,
   getQueueMaxStalledCount,
-} from '../utils/env.util'
-import { memoryIngestionService } from '../services/memory-ingestion.service'
-import { memoryScoringService } from '../services/memory-scoring.service'
-import { logger } from '../utils/logger.util'
+} from '../utils/core/env.util'
+import { memoryIngestionService } from '../services/memory/memory-ingestion.service'
+import { memoryScoringService } from '../services/memory/memory-scoring.service'
+import { logger } from '../utils/core/logger.util'
 import { getRedisClient } from '../lib/redis.lib'
 
 type PrismaError = {

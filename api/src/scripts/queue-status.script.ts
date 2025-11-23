@@ -1,5 +1,5 @@
 import { contentQueue } from '../lib/queue.lib'
-import { logger } from '../utils/logger.util'
+import { logger } from '../utils/core/logger.util'
 
 /**
  * Check queue status and provide information about jobs

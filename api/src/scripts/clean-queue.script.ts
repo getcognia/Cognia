@@ -11,7 +11,7 @@
 
 import { contentQueue, cleanQueue } from '../lib/queue.lib'
 import { getRedisClient, scanKeys } from '../lib/redis.lib'
-import { logger } from '../utils/logger.util'
+import { logger } from '../utils/core/logger.util'
 import dotenv from 'dotenv'
 
 dotenv.config()

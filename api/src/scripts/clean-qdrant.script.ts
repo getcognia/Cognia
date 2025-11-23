@@ -1,5 +1,5 @@
 import { qdrantClient, COLLECTION_NAME } from '../lib/qdrant.lib'
-import { logger } from '../utils/logger.util'
+import { logger } from '../utils/core/logger.util'
 
 async function cleanQdrant() {
   try {

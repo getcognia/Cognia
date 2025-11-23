@@ -1,36 +1,28 @@
 import { Router } from 'express'
-import { MemoryController } from '../controller/memory.controller'
-import { MemorySearchController } from '../controller/memory-search.controller'
-import { MemoryMeshController } from '../controller/memory-mesh.controller'
-import { MemorySnapshotController } from '../controller/memory-snapshot.controller'
-import { AnalyticsController } from '../controller/analytics.controller'
-import { submitContent } from '../controller/content.controller'
+import { MemoryController } from '../controller/memory/memory.controller'
+import { MemoryMeshController } from '../controller/memory/memory-mesh.controller'
+import { DataController } from '../controller/data/data.controller'
+import { AnalyticsController } from '../controller/analytics/analytics.controller'
+import { ContentController } from '../controller/content/content.controller'
+import { SearchController } from '../controller/search/search.controller'
 import { authenticateToken } from '../middleware/auth.middleware'
 
 const router = Router()
 
-router.post('/process', authenticateToken, submitContent)
+router.post('/process', authenticateToken, ContentController.submitContent)
 router.get('/user/count', authenticateToken, MemoryController.getUserMemoryCount)
 router.get('/user/recent', authenticateToken, MemoryController.getRecentMemories)
-router.get('/search', authenticateToken, MemorySearchController.searchMemories)
+router.get('/search', authenticateToken, SearchController.searchMemories)
 router.get('/analytics', authenticateToken, AnalyticsController.getAnalytics)
 router.get('/mesh', authenticateToken, MemoryMeshController.getMemoryMesh)
 router.get('/relations/:memoryId', authenticateToken, MemoryMeshController.getMemoryWithRelations)
 router.get('/cluster/:memoryId', authenticateToken, MemoryMeshController.getMemoryCluster)
-router.get(
-  '/search-embeddings',
-  authenticateToken,
-  MemorySearchController.searchMemoriesWithEmbeddings
-)
-router.get('/search-hybrid', authenticateToken, MemorySearchController.searchMemoriesHybrid)
+router.get('/search-embeddings', authenticateToken, SearchController.searchMemoriesWithEmbeddings)
+router.get('/search-hybrid', authenticateToken, SearchController.searchMemoriesHybrid)
 router.post('/process-mesh/:memoryId', authenticateToken, MemoryMeshController.processMemoryForMesh)
-router.get('/snapshots', authenticateToken, MemorySnapshotController.getMemorySnapshots)
-router.get('/snapshot/:snapshotId', authenticateToken, MemorySnapshotController.getMemorySnapshot)
-router.post(
-  '/backfill-snapshots',
-  authenticateToken,
-  MemorySnapshotController.backfillMemorySnapshots
-)
+router.get('/snapshots', authenticateToken, DataController.getMemorySnapshots)
+router.get('/snapshot/:snapshotId', authenticateToken, DataController.getMemorySnapshot)
+router.post('/backfill-snapshots', authenticateToken, DataController.backfillMemorySnapshots)
 router.get('/health', MemoryController.healthCheck)
 router.get('/debug', authenticateToken, MemoryController.debugMemories)
 router.delete('/:memoryId', authenticateToken, MemoryController.deleteMemory)

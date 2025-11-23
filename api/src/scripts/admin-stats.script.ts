@@ -1,7 +1,7 @@
 import { prisma } from '../lib/prisma.lib'
 import { getRedisClient } from '../lib/redis.lib'
 import { qdrantClient, COLLECTION_NAME } from '../lib/qdrant.lib'
-import { logger } from '../utils/logger.util'
+import { logger } from '../utils/core/logger.util'
 
 interface AdminStats {
   users: {

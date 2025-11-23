@@ -2,7 +2,7 @@ import 'dotenv/config'
 import path from 'path'
 import fs from 'fs'
 import { prisma } from '../lib/prisma.lib'
-import { logger } from '../utils/logger.util'
+import { logger } from '../utils/core/logger.util'
 
 async function run() {
   const args = process.argv.slice(2)

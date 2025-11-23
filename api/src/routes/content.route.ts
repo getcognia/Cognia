@@ -1,13 +1,13 @@
 import { Router } from 'express'
 
-import { submitContent, getSummarizedContent } from '../controller/content.controller'
-import { draftEmailReply } from '../controller/email.controller'
+import { ContentController } from '../controller/content/content.controller'
+import { EmailController } from '../controller/email/email.controller'
 import { authenticateToken } from '../middleware/auth.middleware'
 
 const router = Router()
 
-router.post('/', authenticateToken, submitContent)
-router.get('/user', authenticateToken, getSummarizedContent)
-router.post('/email/draft', authenticateToken, draftEmailReply)
+router.post('/', authenticateToken, ContentController.submitContent)
+router.get('/user', authenticateToken, ContentController.getSummarizedContent)
+router.post('/email/draft', authenticateToken, EmailController.draftEmailReply)
 
 export default router

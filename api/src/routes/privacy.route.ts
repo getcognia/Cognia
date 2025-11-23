@@ -1,9 +1,9 @@
 import { Router } from 'express'
 import { authenticateToken } from '../middleware/auth.middleware'
-import { PrivacyController } from '../controller/privacy.controller'
+import { DataController } from '../controller/data/data.controller'
 
 const router = Router()
 
-router.get('/audit-logs', authenticateToken, PrivacyController.getAuditLogs)
+router.get('/audit-logs', authenticateToken, DataController.getAuditLogs)
 
 export default router

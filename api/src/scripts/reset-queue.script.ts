@@ -9,7 +9,7 @@
  */
 
 import { contentQueue } from '../lib/queue.lib'
-import { logger } from '../utils/logger.util'
+import { logger } from '../utils/core/logger.util'
 import dotenv from 'dotenv'
 
 dotenv.config()

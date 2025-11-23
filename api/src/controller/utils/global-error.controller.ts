@@ -1,5 +1,5 @@
 import { Request, Response } from 'express'
-import { logger } from '../../utils/logger.util'
+import { logger } from '../../utils/core/logger.util'
 
 interface IError extends Error {
   statusCode?: number

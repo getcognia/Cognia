@@ -1,8 +1,13 @@
 import { Queue, QueueEvents, JobsOptions, QueueOptions } from 'bullmq'
 import crypto from 'crypto'
-import { getRedisConnection } from '../utils/env.util'
-import { logger } from '../utils/logger.util'
-import { normalizeText, hashCanonical, normalizeUrl, calculateSimilarity } from '../utils/text.util'
+import { getRedisConnection } from '../utils/core/env.util'
+import { logger } from '../utils/core/logger.util'
+import {
+  normalizeText,
+  hashCanonical,
+  normalizeUrl,
+  calculateSimilarity,
+} from '../utils/text/text.util'
 import { getRedisClient } from './redis.lib'
 
 export interface ContentJobData {

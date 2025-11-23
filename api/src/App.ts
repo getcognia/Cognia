@@ -15,15 +15,13 @@ import dotenv from 'dotenv'
 import globalErrorHandler from './controller/utils/global-error.controller'
 
 import { routes } from './routes/index.route'
-
 import { prisma } from './lib/prisma.lib'
-
 import { startContentWorker } from './workers/content-worker'
 import { startCyclicProfileWorker } from './workers/profile-worker'
 import { ensureCollection } from './lib/qdrant.lib'
-import { aiProvider } from './services/ai-provider.service'
-import { logger } from './utils/logger.util'
-import { getMorganOutputMode } from './utils/env.util'
+import { aiProvider } from './services/ai/ai-provider.service'
+import { logger } from './utils/core/logger.util'
+import { getMorganOutputMode } from './utils/core/env.util'
 
 dotenv.config()
 
@@ -194,8 +192,8 @@ if (morganOutputMode === 'log' || morganOutputMode === 'both') {
 }
 app.use(express.urlencoded({ extended: false, limit: '10mb' }))
 app.use(express.json({ limit: '10mb' }))
-import { getAllowedOrigins } from './utils/env.util'
-import { validateRequestSize } from './utils/validation.util'
+import { getAllowedOrigins } from './utils/core/env.util'
+import { validateRequestSize } from './utils/validation/validation.util'
 
 app.use(validateRequestSize(10 * 1024 * 1024)) // 10MB limit
 
