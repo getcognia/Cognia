@@ -60,6 +60,47 @@ export const staggerContainerVariants: Variants = {
   },
 }
 
+export const tabContentVariants: Variants = {
+  initial: {
+    opacity: 0,
+    y: 12,
+    scale: 0.998,
+  },
+  animate: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: {
+      duration: 0.32,
+      ease: MOTION_EASE,
+    },
+  },
+  exit: {
+    opacity: 0,
+    y: -8,
+    scale: 0.998,
+    transition: {
+      duration: 0.2,
+      ease: MOTION_EASE,
+    },
+  },
+}
+
+export const scaleInVariants: Variants = {
+  initial: {
+    opacity: 0,
+    scale: 0.95,
+  },
+  animate: {
+    opacity: 1,
+    scale: 1,
+    transition: {
+      duration: 0.3,
+      ease: MOTION_EASE,
+    },
+  },
+}
+
 type AnimatedPageProps = HTMLMotionProps<"div"> & {
   children: ReactNode
 }

@@ -46,7 +46,7 @@ export function getOrganizationSearchLoadingState(input) {
   const phaseIndex = Number.isFinite(input?.phaseIndex)
     ? Math.abs(Math.floor(input.phaseIndex))
     : 0
-  const activeStepIndex = phaseIndex % SUMMARY_LOADING_STEPS.length
+  const activeStepIndex = Math.min(phaseIndex, SUMMARY_LOADING_STEPS.length - 1)
   const activeStep = SUMMARY_LOADING_STEPS[activeStepIndex]
   const queryLabel = normalizeLabel(input?.query)
   const filterLabel = normalizeLabel(input?.filterLabel) || "All Sources"

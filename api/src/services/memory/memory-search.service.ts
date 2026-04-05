@@ -119,14 +119,11 @@ export async function searchMemories(params: {
     }
   }
 
-  const userMemories = await prisma.memory.findMany({
+  const userMemoryCount = await prisma.memory.count({
     where: { user_id: user.id },
-    select: { id: true },
   })
 
-  const userMemoryIds = userMemories.map(m => m.id)
-
-  if (userMemoryIds.length === 0) {
+  if (userMemoryCount === 0) {
     logger.log('[search] no memories found for user', { ts: new Date().toISOString(), userId })
     return {
       query: normalized,
@@ -139,10 +136,10 @@ export async function searchMemories(params: {
   }
 
   // Analyze query to determine dynamic search parameters
-  const queryAnalysis = analyzeQuery(normalized, userMemoryIds.length)
+  const queryAnalysis = analyzeQuery(normalized, userMemoryCount)
   const searchParams = calculateDynamicSearchParams(
     queryAnalysis,
-    userMemoryIds.length,
+    userMemoryCount,
     effectiveLimit
   )
 
@@ -217,10 +214,16 @@ export async function searchMemories(params: {
     userId,
     queryAnalysis,
     searchParams,
-    memoryCount: userMemoryIds.length,
+    memoryCount: userMemoryCount,
   })
 
-  const qdrantSearchResult = await searchQdrant(embedding, userMemoryIds, searchParams)
+  const qdrantSearchResult = await searchQdrant(
+    embedding,
+    {
+      userId: user.id,
+    },
+    searchParams
+  )
 
   if (!qdrantSearchResult || qdrantSearchResult.length === 0) {
     return {
@@ -250,6 +253,19 @@ export async function searchMemories(params: {
 
   const memories = await prisma.memory.findMany({
     where: { id: { in: searchMemoryIds } },
+    select: {
+      id: true,
+      title: true,
+      url: true,
+      timestamp: true,
+      content: true,
+      canonical_text: true,
+      page_metadata: true,
+      memory_type: true,
+      importance_score: true,
+      source: true,
+      created_at: true,
+    },
   })
 
   const scoreMap = new Map<string, number>()

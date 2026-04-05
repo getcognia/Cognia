@@ -14,6 +14,7 @@ import { tokenizeQuery } from './query-processor.service'
 
 const ANSWER_CONTEXT_CHARS = 1400
 const ANSWER_CONTEXT_LEAD_CHARS = 220
+const MAX_ANSWER_RESULTS = 12
 
 export interface UnifiedSearchOptions {
   organizationId: string
@@ -52,6 +53,12 @@ export interface UnifiedSearchResult {
 }
 
 export class UnifiedSearchService {
+  private getAnswerResults(
+    results: UnifiedSearchResult['results']
+  ): UnifiedSearchResult['results'] {
+    return results.slice(0, MAX_ANSWER_RESULTS)
+  }
+
   private buildAnswerContextSnippet(
     query: string,
     result: UnifiedSearchResult['results'][number]
@@ -227,9 +234,18 @@ export class UnifiedSearchService {
     // Fetch memories with document chunk info
     const memories = await prisma.memory.findMany({
       where: { id: { in: memoryIds } },
-      include: {
+      select: {
+        id: true,
+        title: true,
+        content: true,
+        page_metadata: true,
+        source_type: true,
+        url: true,
         document_chunks: {
-          include: {
+          take: 1,
+          select: {
+            chunk_index: true,
+            page_number: true,
             document: {
               select: {
                 id: true,
@@ -246,15 +262,16 @@ export class UnifiedSearchService {
       .map(memory => {
         const chunk = memory.document_chunks[0]
         const score = memoryScores.get(memory.id) || 0
+        const rawContent = memory.content || ''
         const pageMetadata = normalizePageMetadata(memory.page_metadata)
         const contentPreview = buildMemoryPreviewText({
           title: memory.title,
-          content: memory.content,
+          content: rawContent,
           pageMetadata,
         })
         const retrievalText = buildMemoryRetrievalText({
           title: memory.title,
-          content: memory.content,
+          content: rawContent,
           pageMetadata,
         })
 
@@ -266,7 +283,7 @@ export class UnifiedSearchService {
           pageNumber: chunk?.page_number ?? undefined,
           content: retrievalText,
           contentPreview:
-            contentPreview || memory.content.substring(0, 300) + (memory.content.length > 300 ? '...' : ''),
+            contentPreview || rawContent.substring(0, 300) + (rawContent.length > 300 ? '...' : ''),
           score,
           sourceType: memory.source_type || SourceType.EXTENSION,
           title: memory.title ?? undefined,
@@ -276,27 +293,18 @@ export class UnifiedSearchService {
       .sort((a, b) => b.score - a.score)
       .slice(0, finalLimit)
 
-    // Group by document for better context
-    const documentGroups = new Map<string, typeof results>()
-    for (const result of results) {
-      const key = result.documentId || result.memoryId
-      if (!documentGroups.has(key)) {
-        documentGroups.set(key, [])
-      }
-      documentGroups.get(key)!.push(result)
-    }
-
     // Generate AI answer asynchronously to prevent blocking search results
     let answerJobId: string | undefined
 
     if (includeAnswer && results.length > 0 && userId) {
       try {
+        const answerResults = this.getAnswerResults(results)
         // Create a job for answer generation (await to ensure it's stored before returning)
         const job = await createSearchJob(userId)
         answerJobId = job.id
 
         // Fire-and-forget: generate answer in background
-        this.generateAnswerAsync(job.id, query, results).catch(error => {
+        this.generateAnswerAsync(job.id, query, answerResults).catch(error => {
           logger.error('[unified-search] background answer generation failed', {
             error,
             jobId: job.id,
@@ -316,6 +324,7 @@ export class UnifiedSearchService {
       organizationId,
       queryLength: query.length,
       resultCount: results.length,
+      answerResultCount: includeAnswer ? Math.min(results.length, MAX_ANSWER_RESULTS) : 0,
       answerJobId,
     })
 
@@ -333,8 +342,10 @@ export class UnifiedSearchService {
     query: string,
     results: UnifiedSearchResult['results']
   ): Promise<{ answer: string; citations: UnifiedSearchResult['citations'] }> {
+    const answerResults = this.getAnswerResults(results)
+
     // Build context with numbered references
-    const contextParts = results.map((result, index) => {
+    const contextParts = answerResults.map((result, index) => {
       const source = result.documentName
         ? `[${index + 1}] Document: ${result.documentName}${result.pageNumber ? ` (Page ${result.pageNumber})` : ''}`
         : `[${index + 1}] ${result.title || 'Memory'}`
@@ -352,10 +363,12 @@ User question: ${query}
 
 Instructions:
 1. Answer the question based on the provided context
-2. Use citations like [1], [2] to reference sources
-3. If the context doesn't contain relevant information, say so
-4. Be concise but thorough
-5. Return plain text only, no markdown formatting
+2. Use citations like [1], [2] inline wherever you make a factual claim
+3. If the context doesn't contain relevant information, say so clearly
+4. Return GitHub-flavored Markdown
+5. Prefer a short direct answer followed by bullets when multiple sources or points matter
+6. Do not use tables or code fences
+7. Be concise but thorough
 
 Answer:`
 
@@ -366,14 +379,14 @@ Answer:`
     const citationNumbers = [...new Set(citationMatches.map(m => parseInt(m.slice(1, -1))))]
 
     const citations = citationNumbers
-      .filter(n => n > 0 && n <= results.length)
+      .filter(n => n > 0 && n <= answerResults.length)
       .map(n => ({
         index: n,
-        documentName: results[n - 1].documentName || results[n - 1].title,
-        pageNumber: results[n - 1].pageNumber,
-        memoryId: results[n - 1].memoryId,
-        url: results[n - 1].url,
-        sourceType: results[n - 1].sourceType,
+        documentName: answerResults[n - 1].documentName || answerResults[n - 1].title,
+        pageNumber: answerResults[n - 1].pageNumber,
+        memoryId: answerResults[n - 1].memoryId,
+        url: answerResults[n - 1].url,
+        sourceType: answerResults[n - 1].sourceType,
       }))
 
     return { answer: response, citations }

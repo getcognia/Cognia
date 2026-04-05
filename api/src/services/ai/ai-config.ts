@@ -6,6 +6,7 @@ export const DEFAULT_AI_PROVIDER: AIProvider = 'openai'
 export const DEFAULT_OPENAI_CHAT_MODEL = 'gpt-4o-mini'
 export const DEFAULT_OPENAI_VISION_MODEL = 'gpt-4o-mini'
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small'
+export const DEFAULT_GEMINI_VISION_MODEL = 'gemini-2.5-flash'
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 export const DEFAULT_OLLAMA_EMBED_MODEL = 'nomic-embed-text:latest'
 export const DEFAULT_OLLAMA_GEN_MODEL = 'llama3.1:8b'
@@ -60,6 +61,10 @@ export function getGeminiApiKey(): string | undefined {
 
 export function getGeminiEmbeddingModel(): string {
   return process.env.GEMINI_EMBED_MODEL || DEFAULT_GEMINI_EMBEDDING_MODEL
+}
+
+export function getGeminiVisionModel(): string {
+  return process.env.GEMINI_VISION_MODEL || DEFAULT_GEMINI_VISION_MODEL
 }
 
 export function getOllamaBaseUrl(): string {

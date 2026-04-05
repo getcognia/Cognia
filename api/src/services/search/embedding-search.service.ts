@@ -5,6 +5,12 @@ import { getActiveEmbeddingModelName } from '../ai/ai-config'
 import { sha256Hex } from './query-processor.service'
 import { DynamicSearchParams } from './query-processor.service'
 
+type SearchScope = {
+  userId?: string
+  organizationId?: string
+  memoryIds?: string[]
+}
+
 export async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('timeout')), ms)
@@ -70,12 +76,25 @@ export function getEmbeddingHash(embedding: number[]): string {
 
 export async function searchQdrant(
   embedding: number[],
-  userMemoryIds: string[],
+  scope: SearchScope,
   searchParams: DynamicSearchParams
 ): Promise<Array<{ score?: number; payload?: { memory_id?: string } }>> {
   await ensureCollection()
 
   let qdrantSearchResult: Array<{ score?: number; payload?: { memory_id?: string } }> = []
+  const must: Array<{ key: string; match: { value?: string; any?: string[] } }> = []
+
+  if (scope.userId) {
+    must.push({ key: 'user_id', match: { value: scope.userId } })
+  }
+
+  if (scope.organizationId) {
+    must.push({ key: 'organization_id', match: { value: scope.organizationId } })
+  }
+
+  if (scope.memoryIds && scope.memoryIds.length > 0) {
+    must.push({ key: 'memory_id', match: { any: scope.memoryIds } })
+  }
 
   if (searchParams.searchStrategy === 'broad') {
     logger.log('[embedding-search] performing broad search', {
@@ -85,7 +104,7 @@ export async function searchQdrant(
     qdrantSearchResult = await qdrantClient.search(COLLECTION_NAME, {
       vector: embedding,
       filter: {
-        must: [{ key: 'memory_id', match: { any: userMemoryIds } }],
+        must,
       },
       limit: searchParams.qdrantLimit,
       with_payload: true,
@@ -105,14 +124,16 @@ export async function searchQdrant(
   } else {
     logger.log('[embedding-search] searching qdrant', {
       ts: new Date().toISOString(),
-      memoryCount: userMemoryIds.length,
+      userId: scope.userId,
+      organizationId: scope.organizationId,
+      memoryIdCount: scope.memoryIds?.length ?? 0,
       qdrantLimit: searchParams.qdrantLimit,
       strategy: searchParams.searchStrategy,
     })
     qdrantSearchResult = await qdrantClient.search(COLLECTION_NAME, {
       vector: embedding,
       filter: {
-        must: [{ key: 'memory_id', match: { any: userMemoryIds } }],
+        must,
       },
       limit: searchParams.qdrantLimit,
       with_payload: true,

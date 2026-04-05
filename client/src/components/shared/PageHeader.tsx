@@ -6,6 +6,27 @@ import { useNavigate } from "react-router-dom"
 import BriefingBadge from "@/components/briefing/BriefingBadge"
 import { fadeUpVariants } from "@/components/shared/site-motion"
 
+function LogoutButton() {
+  const { logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogout = async () => {
+    await logout()
+    navigate("/login")
+  }
+
+  return (
+    <motion.button
+      onClick={handleLogout}
+      className="px-3 py-1.5 text-xs font-mono text-gray-600 hover:text-gray-900 hover:bg-gray-100 border border-gray-300 transition-colors"
+      whileHover={{ y: -2, scale: 1.01 }}
+      whileTap={{ scale: 0.98 }}
+    >
+      Logout
+    </motion.button>
+  )
+}
+
 interface PageHeaderProps {
   pageName: string
   rightActions?: React.ReactNode
@@ -104,6 +125,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                   {btn.label === "Briefings" && <BriefingBadge />}
                 </motion.button>
               ))}
+              <LogoutButton />
             </div>
           </div>
         </div>

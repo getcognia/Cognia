@@ -7,13 +7,15 @@ import type { DocumentPreviewData } from "@/services/organization/organization.s
 import type { OrganizationSearchResponse } from "@/types/organization"
 import { DocumentPreviewModal } from "@/components/ui/document-preview-modal"
 import { getOrganizationAnswerState } from "@/components/organization/organization-answer-state"
+import { getOrganizationAnswerDeliveryMode } from "@/components/organization/organization-answer-delivery"
+import { OrganizationSummaryMarkdown } from "@/components/organization/OrganizationSummaryMarkdown"
 import {
   getOrganizationSearchFilterLabel,
   getOrganizationSearchFilters,
   getOrganizationSearchSourceTypes,
 } from "@/components/organization/organization-search-filters"
-import { buildOrganizationSearchHighlights } from "@/components/organization/organization-search-highlighting"
 import { getOrganizationSearchSectionOrder } from "@/components/organization/organization-search-layout"
+import { getVisibleOrganizationSearchCitations } from "@/components/organization/organization-search-citations"
 import { getOrganizationSearchLoadingState } from "@/components/organization/organization-search-loading"
 import { getVisibleOrganizationSearchResults } from "@/components/organization/organization-search-results"
 import { getOrganizationSearchState } from "@/components/organization/organization-search-state"
@@ -169,6 +171,9 @@ export function OrganizationSearch() {
     citations: results?.citations,
     answerJobId: results?.answerJobId,
   })
+  const visibleCitations = getVisibleOrganizationSearchCitations(
+    results?.citations
+  )
   const summaryLoadingState = getOrganizationSearchLoadingState({
     query: submittedQuery || query.trim(),
     filterLabel: activeFilterLabel,
@@ -180,6 +185,7 @@ export function OrganizationSearch() {
     answerJobId: results?.answerJobId,
     answer: results?.answer,
   })
+  const answerDelivery = getOrganizationAnswerDeliveryMode()
   const hasSummarySection =
     hasFetchedResults &&
     (answerState.shouldPoll ||
@@ -236,6 +242,28 @@ export function OrganizationSearch() {
       })
     }
 
+    if (!answerDelivery.shouldPoll) {
+      const unsubscribe = organizationService.subscribeToAnswerJob(jobId, {
+        onCompleted: (job) => {
+          if (isCancelled) {
+            return
+          }
+          updateCompletedAnswer(job)
+        },
+        onError: (message) => {
+          if (isCancelled) {
+            return
+          }
+          markSummaryUnavailable(message || "Summary generation failed.")
+        },
+      })
+
+      return () => {
+        isCancelled = true
+        unsubscribe()
+      }
+    }
+
     const pollAnswerJob = async () => {
       try {
         const job = await organizationService.getAnswerJobStatus(jobId)
@@ -272,7 +300,7 @@ export function OrganizationSearch() {
       isCancelled = true
       stopPolling()
     }
-  }, [answerState.shouldPoll, results?.answerJobId])
+  }, [answerDelivery.shouldPoll, answerState.shouldPoll, results?.answerJobId])
 
   useEffect(() => {
     if (!answerState.shouldPoll) {
@@ -280,14 +308,18 @@ export function OrganizationSearch() {
       return
     }
 
+    const maxPhaseIndex = Math.max(0, summaryLoadingState.steps.length - 1)
+
     const intervalId = window.setInterval(() => {
-      setSummaryLoadingPhase((currentPhase) => currentPhase + 1)
+      setSummaryLoadingPhase((currentPhase) =>
+        currentPhase >= maxPhaseIndex ? currentPhase : currentPhase + 1
+      )
     }, 1400)
 
     return () => {
       window.clearInterval(intervalId)
     }
-  }, [answerState.shouldPoll])
+  }, [answerState.shouldPoll, summaryLoadingState.steps.length])
 
   return (
     <div className="space-y-6">
@@ -379,75 +411,77 @@ export function OrganizationSearch() {
       {results && (
         <div className="space-y-6">
           {sectionOrder.map((section) => {
-            if (section === "summary") {
-              return (
-                <motion.div
-                  key="summary"
-                  initial="initial"
-                  animate="animate"
-                  variants={fadeUpVariants}
+            if (section !== "summary") return null
+
+            return (
+              <motion.div
+                key="summary"
+                initial="initial"
+                animate="animate"
+                variants={fadeUpVariants}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">
+                    [SUMMARY]
+                  </span>
+                  <span className="text-xs font-mono text-gray-400">
+                    {answerState.shouldPoll
+                      ? "Synthesizing..."
+                      : answerState.renderableAnswer
+                        ? "Ready"
+                        : "Unavailable"}
+                  </span>
+                </div>
+
+                <div
+                  className={
+                    answerState.shouldPoll
+                      ? ""
+                      : "border border-gray-200 bg-white p-4"
+                  }
                 >
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">
-                      [SUMMARY]
-                    </span>
-                    <span className="text-xs font-mono text-gray-400">
-                      {answerState.shouldPoll
-                        ? "Synthesizing..."
-                        : answerState.renderableAnswer
-                          ? "Ready"
-                          : "Unavailable"}
-                    </span>
-                  </div>
+                  {answerState.renderableAnswer ? (
+                    <>
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <OrganizationSummaryMarkdown
+                          markdown={answerState.renderableAnswer}
+                        />
+                      </motion.div>
 
-                  <div
-                    className={
-                      answerState.shouldPoll
-                        ? ""
-                        : "border border-gray-200 bg-white p-4"
-                    }
-                  >
-                    {answerState.renderableAnswer ? (
-                      <>
-                        <motion.p
-                          className="text-sm leading-relaxed whitespace-pre-wrap text-gray-700"
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.3 }}
+                      {visibleCitations.length > 0 && (
+                        <motion.div
+                          className="mt-4 flex flex-wrap gap-2"
+                          initial="initial"
+                          animate="animate"
+                          variants={staggerContainerVariants}
                         >
-                          {answerState.renderableAnswer}
-                        </motion.p>
-
-                        {results?.citations && results.citations.length > 0 && (
-                          <motion.div
-                            className="mt-4 flex flex-wrap gap-2"
-                            initial="initial"
-                            animate="animate"
-                            variants={staggerContainerVariants}
-                          >
-                            {results.citations.map((citation) => (
-                              <motion.button
-                                key={`${citation.memoryId}-${citation.index}`}
-                                onClick={() =>
-                                  handleCitationClick(
-                                    citation.memoryId,
-                                    citation.url,
-                                    citation.sourceType
-                                  )
-                                }
-                                className="rounded border border-gray-200 px-2 py-1 text-xs font-mono text-gray-600 transition-colors hover:border-gray-900 hover:text-gray-900"
-                                variants={fadeUpVariants}
-                                whileHover={{ y: -2, scale: 1.01 }}
-                                whileTap={{ scale: 0.98 }}
-                              >
-                                [{citation.index}]{" "}
-                                {citation.documentName || "Source"}
-                              </motion.button>
-                            ))}
-                          </motion.div>
-                        )}
-                      </>
-                    ) : answerState.shouldPoll ? (
+                          {visibleCitations.map((citation) => (
+                            <motion.button
+                              key={`${citation.memoryId}-${citation.indices.join("-")}`}
+                              onClick={() =>
+                                handleCitationClick(
+                                  citation.memoryId,
+                                  citation.url,
+                                  citation.sourceType
+                                )
+                              }
+                              className="rounded border border-gray-200 px-2 py-1 text-xs font-mono text-gray-600 transition-colors hover:border-gray-900 hover:text-gray-900"
+                              variants={fadeUpVariants}
+                              whileHover={{ y: -2, scale: 1.01 }}
+                              whileTap={{ scale: 0.98 }}
+                            >
+                              [{citation.indices.join(", ")}]{" "}
+                              {citation.documentName || "Source"}
+                            </motion.button>
+                          ))}
+                        </motion.div>
+                      )}
+                    </>
+                  ) : answerState.shouldPoll ? (
                       <div className="relative overflow-hidden border border-gray-200 bg-gradient-to-br from-white via-stone-50 to-gray-50 p-4 sm:p-5">
                         <motion.div
                           className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-gray-900 to-transparent"
@@ -642,100 +676,6 @@ export function OrganizationSearch() {
                   </div>
                 </motion.div>
               )
-            }
-
-            return (
-              <motion.div
-                key="results"
-                initial="initial"
-                animate="animate"
-                variants={fadeUpVariants}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">
-                    [FETCHED RESULTS]
-                  </span>
-                  <span className="text-xs font-mono text-gray-400">
-                    {visibleResults.length} result
-                    {visibleResults.length !== 1 && "s"}
-                  </span>
-                </div>
-
-                <motion.div
-                  className="border border-gray-200 divide-y divide-gray-100"
-                  initial="initial"
-                  animate="animate"
-                  variants={staggerContainerVariants}
-                >
-                  {visibleResults.map((result) => {
-                    const content = result.content || result.contentPreview
-                    const highlightedSegments = buildOrganizationSearchHighlights(
-                      content,
-                      submittedQuery
-                    )
-
-                    return (
-                      <motion.button
-                        key={result.memoryId}
-                        onClick={() =>
-                          handleCitationClick(
-                            result.memoryId,
-                            result.url,
-                            result.sourceType
-                          )
-                        }
-                        className="w-full p-4 text-left hover:bg-gray-50 transition-colors cursor-pointer"
-                        variants={fadeUpVariants}
-                        whileHover={{ y: -2, backgroundColor: "#f9fafb" }}
-                        whileTap={{ scale: 0.995 }}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              {(result.sourceType === "EXTENSION" ||
-                                result.sourceType === "INTEGRATION") && (
-                                <span className="text-blue-500 text-xs">↗</span>
-                              )}
-                              <span className="text-sm font-medium text-gray-900">
-                                {result.documentName || result.title || "Document"}
-                              </span>
-                              {result.pageNumber && (
-                                <span className="text-xs font-mono text-gray-400">
-                                  p.{result.pageNumber}
-                                </span>
-                              )}
-                            </div>
-                            <p className="max-h-32 overflow-y-auto text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">
-                              {highlightedSegments.map((segment, index) =>
-                                segment.isMatch ? (
-                                  <mark
-                                    key={`${result.memoryId}-${index}`}
-                                    className="rounded bg-amber-200 px-0.5 text-gray-900"
-                                  >
-                                    {segment.text}
-                                  </mark>
-                                ) : (
-                                  <span key={`${result.memoryId}-${index}`}>
-                                    {segment.text}
-                                  </span>
-                                )
-                              )}
-                            </p>
-                            <div className="flex items-center gap-3 mt-2 text-xs font-mono text-gray-400">
-                              <span>{result.sourceType}</span>
-                              <span>{Math.round(result.score * 100)}% match</span>
-                            </div>
-                          </div>
-                          <span className="text-xs font-mono text-gray-400">
-                            →
-                          </span>
-                        </div>
-                      </motion.button>
-                    )
-                  })}
-                </motion.div>
-              </motion.div>
-            )
           })}
 
           {results.results.length === 0 && (

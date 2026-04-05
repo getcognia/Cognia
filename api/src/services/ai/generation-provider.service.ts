@@ -11,6 +11,35 @@ interface ApiError {
   message?: string
 }
 
+function getErrorMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') return ''
+  return String((error as ApiError).message || '').toLowerCase()
+}
+
+function isUnrecoverableGenerationRateLimit(error: unknown): boolean {
+  if (!isRateLimitError(error)) {
+    return false
+  }
+
+  const message = getErrorMessage(error)
+
+  return (
+    message.includes('requests per day') ||
+    message.includes('(rpd)') ||
+    message.includes('request too large') ||
+    (message.includes('tokens per min') && message.includes('requested'))
+  )
+}
+
+export function shouldRetryGenerationError(error: unknown): boolean {
+  if (isRateLimitError(error)) {
+    return !isUnrecoverableGenerationRateLimit(error)
+  }
+
+  const status = (error as ApiError)?.status
+  return status === 503 || status === 502
+}
+
 export class GenerationProviderService {
   async generateContent(
     prompt: string,
@@ -33,12 +62,7 @@ export class GenerationProviderService {
             maxRetries: 3,
             baseDelayMs: 1000,
             maxDelayMs: 10000,
-            shouldRetry: error => {
-              if (isRateLimitError(error)) return true
-              const status = (error as ApiError)?.status
-              if (status === 503 || status === 502 || status === 429) return true
-              return false
-            },
+            shouldRetry: shouldRetryGenerationError,
             onRetry: (error, attempt, delayMs) => {
               const status = (error as ApiError)?.status
               logger.warn(

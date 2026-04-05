@@ -330,9 +330,11 @@ export function buildMemoryRows(
   }>,
   scoreMap: Map<string, number>
 ): MemoryRow[] {
+  const memoryMap = new Map(memories.map(memory => [memory.id, memory]))
+
   return Array.from(scoreMap.entries())
     .map(([memoryId, semanticScore]) => {
-      const memory = memories.find(m => m.id === memoryId)
+      const memory = memoryMap.get(memoryId)
       if (!memory) return null
       const pageMetadata = normalizePageMetadata(memory.page_metadata)
       const previewSource = buildMemoryPreviewText({

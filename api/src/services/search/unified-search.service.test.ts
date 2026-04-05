@@ -177,7 +177,7 @@ test('organization summary answer uses retrieved content when the preview omits 
     observedPrompt = prompt
 
     if (prompt.includes('twenty-four hours after confirmation of a security incident')) {
-      return 'The breach notification timeline is within twenty-four hours after confirmation of a security incident. [1]'
+      return '## Breach Notification Timeline\n\n- Aperture Cloud will notify Northstar Bank within twenty-four hours after confirmation of a security incident. [1]'
     }
 
     return 'The provided context does not contain information regarding the breach notification timeline.'
@@ -227,9 +227,10 @@ test('organization summary answer uses retrieved content when the preview omits 
     ])
 
     assert.match(observedPrompt, /twenty-four hours after confirmation of a security incident/)
+    assert.match(observedPrompt, /Return GitHub-flavored Markdown/i)
     assert.equal(
       answerResult.answer,
-      'The breach notification timeline is within twenty-four hours after confirmation of a security incident. [1]'
+      '## Breach Notification Timeline\n\n- Aperture Cloud will notify Northstar Bank within twenty-four hours after confirmation of a security incident. [1]'
     )
     assert.deepEqual(answerResult.citations, [
       {
@@ -237,6 +238,85 @@ test('organization summary answer uses retrieved content when the preview omits 
         documentName: '07_security_questionnaire_response.txt',
         pageNumber: 1,
         memoryId: 'memory-1',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+    ])
+  } finally {
+    aiProvider.generateContent = originalGenerateContent
+  }
+})
+
+test('organization summary answer only includes the highest-ranked evidence slices in the prompt', async () => {
+  const originalGenerateContent = aiProvider.generateContent
+
+  let observedPrompt = ''
+
+  aiProvider.generateContent = (async (prompt: string) => {
+    observedPrompt = prompt
+    return 'Top answer [1] [12]'
+  }) as typeof aiProvider.generateContent
+
+  try {
+    const answerResult = await (
+      unifiedSearchService as unknown as {
+        generateAnswer: (
+          query: string,
+          results: Array<{
+            memoryId: string
+            documentName?: string
+            pageNumber?: number
+            content: string
+            contentPreview: string
+            score: number
+            sourceType: SourceType
+            title?: string
+            url?: string
+          }>
+        ) => Promise<{
+          answer: string
+          citations: Array<{
+            index: number
+            documentName?: string
+            pageNumber?: number
+            memoryId: string
+            url?: string
+            sourceType?: SourceType
+          }>
+        }>
+      }
+    ).generateAnswer(
+      'Show the implementation milestones.',
+      Array.from({ length: 15 }, (_, index) => ({
+        memoryId: `memory-${index + 1}`,
+        documentName: `Implementation Plan ${index + 1}.pdf`,
+        pageNumber: index + 1,
+        content: `Milestone ${index + 1} is captured here with detailed delivery information.`,
+        contentPreview: `Preview ${index + 1}`,
+        score: 1 - index * 0.01,
+        sourceType: SourceType.DOCUMENT,
+        title: `Implementation Plan ${index + 1}`,
+      }))
+    )
+
+    assert.match(observedPrompt, /\[1\] Document: Implementation Plan 1\.pdf/)
+    assert.match(observedPrompt, /\[12\] Document: Implementation Plan 12\.pdf/)
+    assert.doesNotMatch(observedPrompt, /\[13\] Document: Implementation Plan 13\.pdf/)
+    assert.equal(answerResult.answer, 'Top answer [1] [12]')
+    assert.deepEqual(answerResult.citations, [
+      {
+        index: 1,
+        documentName: 'Implementation Plan 1.pdf',
+        pageNumber: 1,
+        memoryId: 'memory-1',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+      {
+        index: 12,
+        documentName: 'Implementation Plan 12.pdf',
+        pageNumber: 12,
+        memoryId: 'memory-12',
         url: undefined,
         sourceType: SourceType.DOCUMENT,
       },

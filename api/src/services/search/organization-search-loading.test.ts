@@ -13,7 +13,7 @@ test("organization search loading state surfaces retrieval context instead of a 
   const payload = {
     query: "What is the breach notification timeline?",
     filterLabel: "All Sources",
-    phaseIndex: 4,
+    phaseIndex: 1,
     results: [
       {
         memoryId: "memory-1",
@@ -67,4 +67,69 @@ test("organization search loading state surfaces retrieval context instead of a 
     "Security Questionnaire.txt",
     "Northstar trust center",
   ])
+})
+
+test("organization search loading state stays on the final step instead of wrapping back to step one", () => {
+  const modulePath = path.resolve(
+    __dirname,
+    "../../../../client/src/components/organization/organization-search-loading.js"
+  )
+  const moduleUrl = pathToFileURL(modulePath).href
+  const payload = {
+    phaseIndex: 3,
+    results: [
+      {
+        memoryId: "memory-1",
+        documentName: "Security Questionnaire.txt",
+        sourceType: "DOCUMENT",
+      },
+    ],
+  }
+  const output = execFileSync(
+    "node",
+    [
+      "--input-type=module",
+      "--eval",
+      `import(${JSON.stringify(moduleUrl)}).then(({ getOrganizationSearchLoadingState }) => {
+        const value = getOrganizationSearchLoadingState(${JSON.stringify(payload)})
+        process.stdout.write(JSON.stringify(value))
+      })`,
+    ],
+    { encoding: "utf8" }
+  )
+
+  const loadingState = JSON.parse(output) as {
+    activeStep: { label: string }
+    activeStepIndex: number
+    progressLabel: string
+    steps: Array<{ label: string; isActive: boolean; isComplete: boolean }>
+  }
+
+  assert.equal(loadingState.activeStep.label, "Drafting summary")
+  assert.equal(loadingState.activeStepIndex, 2)
+  assert.equal(loadingState.progressLabel, "3/3")
+  assert.deepEqual(
+    loadingState.steps.map((step) => ({
+      label: step.label,
+      isActive: step.isActive,
+      isComplete: step.isComplete,
+    })),
+    [
+      {
+        label: "Reviewing evidence",
+        isActive: false,
+        isComplete: true,
+      },
+      {
+        label: "Linking citations",
+        isActive: false,
+        isComplete: true,
+      },
+      {
+        label: "Drafting summary",
+        isActive: true,
+        isComplete: false,
+      },
+    ]
+  )
 })

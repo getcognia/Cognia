@@ -34,8 +34,26 @@ export class MemoryMeshService {
   }
   async generateEmbeddingsForMemory(memoryId: string): Promise<void> {
     try {
+      await ensureCollection()
+
       const memory = await prisma.memory.findUnique({
         where: { id: memoryId },
+        select: {
+          id: true,
+          user_id: true,
+          title: true,
+          content: true,
+          canonical_text: true,
+          organization_id: true,
+          source_type: true,
+          page_metadata: true,
+          document_chunks: {
+            select: {
+              document_id: true,
+            },
+            take: 1,
+          },
+        },
       })
 
       if (!memory) {
@@ -52,14 +70,12 @@ export class MemoryMeshService {
 
       if (retrievalText) {
         embeddingPromises.push(
-          this.createEmbedding(memoryId, memory.user_id, retrievalText, 'content')
+          this.createEmbedding(memory, retrievalText, 'content')
         )
       }
 
       if (memory.title) {
-        embeddingPromises.push(
-          this.createEmbedding(memoryId, memory.user_id, memory.title, 'title')
-        )
+        embeddingPromises.push(this.createEmbedding(memory, memory.title, 'title'))
       }
 
       await Promise.all(embeddingPromises)
@@ -70,30 +86,20 @@ export class MemoryMeshService {
   }
 
   private async createEmbedding(
-    memoryId: string,
-    userId: string,
+    memory: {
+      id: string
+      user_id: string
+      organization_id: string | null
+      source_type: string | null
+      page_metadata: unknown
+      document_chunks: Array<{
+        document_id: string | null
+      }>
+    },
     text: string,
     type: string
   ): Promise<void> {
     try {
-      await ensureCollection()
-
-      // Fetch memory to get organization_id and source_type
-      const memory = await prisma.memory.findUnique({
-        where: { id: memoryId },
-        select: {
-          organization_id: true,
-          source_type: true,
-          page_metadata: true,
-          document_chunks: {
-            select: {
-              document_id: true,
-            },
-            take: 1,
-          },
-        },
-      })
-
       const metadata = (memory?.page_metadata as Record<string, unknown> | null) || {}
       const matterIds = Array.isArray(metadata.matterIds)
         ? metadata.matterIds.filter((value): value is string => typeof value === 'string')
@@ -118,8 +124,8 @@ export class MemoryMeshService {
             id: pointId,
             vector: embedding,
             payload: {
-              memory_id: memoryId,
-              user_id: userId,
+              memory_id: memory.id,
+              user_id: memory.user_id,
               embedding_type: type,
               model_name: getActiveEmbeddingModelName(),
               created_at: new Date().toISOString(),
@@ -141,7 +147,7 @@ export class MemoryMeshService {
         ],
       })
     } catch (error) {
-      logger.error(`Error creating ${type} embedding for memory ${memoryId}:`, error)
+      logger.error(`Error creating ${type} embedding for memory ${memory.id}:`, error)
       throw error
     }
   }
