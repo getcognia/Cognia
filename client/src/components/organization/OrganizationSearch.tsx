@@ -16,6 +16,7 @@ import {
 } from "@/components/organization/organization-search-filters"
 import { getOrganizationSearchSectionOrder } from "@/components/organization/organization-search-layout"
 import { getOrganizationSearchLoadingState } from "@/components/organization/organization-search-loading"
+import { buildOrganizationSearchOpenUrl } from "@/components/organization/organization-search-opening"
 import { getVisibleOrganizationSearchResults } from "@/components/organization/organization-search-results"
 import { getOrganizationSearchState } from "@/components/organization/organization-search-state"
 import { OrganizationSummaryMarkdown } from "@/components/organization/OrganizationSummaryMarkdown"
@@ -124,9 +125,18 @@ export function OrganizationSearch() {
   // Handle clicking on a citation to preview the document or open URL
   const handleCitationClick = useCallback(
     async (memoryId: string, url?: string, sourceType?: string) => {
+      const matchedResult = results?.results.find(
+        (result) => result.memoryId === memoryId
+      )
+
       // For extension/integration sources with a URL, open directly
       if (url && (sourceType === "EXTENSION" || sourceType === "INTEGRATION")) {
-        window.open(url, "_blank", "noopener,noreferrer")
+        const openUrl = buildOrganizationSearchOpenUrl({
+          url,
+          query: submittedQuery || query,
+          result: matchedResult,
+        })
+        window.open(openUrl || url, "_blank", "noopener,noreferrer")
         return
       }
 
@@ -146,7 +156,12 @@ export function OrganizationSearch() {
       } catch (err) {
         // If document not found but we have a URL, try opening it
         if (url) {
-          window.open(url, "_blank", "noopener,noreferrer")
+          const openUrl = buildOrganizationSearchOpenUrl({
+            url,
+            query: submittedQuery || query,
+            result: matchedResult,
+          })
+          window.open(openUrl || url, "_blank", "noopener,noreferrer")
           setPreviewOpen(false)
           return
         }
@@ -157,7 +172,7 @@ export function OrganizationSearch() {
         setPreviewLoading(false)
       }
     },
-    [currentOrganization]
+    [currentOrganization, query, results?.results, submittedQuery]
   )
 
   const closePreview = useCallback(() => {

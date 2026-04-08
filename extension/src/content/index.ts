@@ -10,6 +10,7 @@ import {
 import { markUserActivity } from './monitoring/activity-tracker'
 import { initEmailDraftPill } from './email/email-draft'
 import { initAIChatIntegration } from './ai-chat/chat-integration'
+import { startSearchResultHighlighting } from './highlighting/search-result-highlighter'
 
 function isLocalhost(): boolean {
   const hostname = window.location.hostname
@@ -102,12 +103,14 @@ detectPrivacyExtensions()
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     markUserActivity()
+    startSearchResultHighlighting()
     if (!isLocalhost()) {
       sendContextToBackground()
     }
   })
 } else {
   markUserActivity()
+  startSearchResultHighlighting()
   if (!isLocalhost()) {
     sendContextToBackground()
   }
