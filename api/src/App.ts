@@ -21,6 +21,7 @@ import { startDocumentWorker } from './workers/document-worker'
 import { startBriefingWorker } from './workers/briefing-worker'
 import { ensureCollection } from './lib/qdrant.lib'
 import { aiProvider } from './services/ai/ai-provider.service'
+import { isOpenAISearchOnlyModeEnabled } from './services/ai/ai-config'
 import { logger } from './utils/core/logger.util'
 import { getAllowedOrigins, getMorganOutputMode } from './utils/core/env.util'
 import { validateRequestSize } from './utils/validation/validation.util'
@@ -283,15 +284,28 @@ server.listen(port, async () => {
     logger.warn('[startup] qdrant_unavailable', String((e as Error)?.message || e))
   }
   const aiReady = aiProvider.isInitialized
+  const openAISearchOnlyMode = isOpenAISearchOnlyModeEnabled()
   logger.log('[startup] ai_provider', { initialized: aiReady })
   startContentWorker()
   logger.log('[startup] content_worker_started')
-  startCyclicProfileWorker()
-  logger.log('[startup] profile_worker_started')
+  if (openAISearchOnlyMode) {
+    logger.log('[startup] profile_worker_skipped', {
+      reason: 'OPENAI_SEARCH_ONLY_MODE',
+    })
+  } else {
+    startCyclicProfileWorker()
+    logger.log('[startup] profile_worker_started')
+  }
   startDocumentWorker()
   logger.log('[startup] document_worker_started')
-  startBriefingWorker()
-  logger.log('[startup] briefing_worker_started')
+  if (openAISearchOnlyMode) {
+    logger.log('[startup] briefing_worker_skipped', {
+      reason: 'OPENAI_SEARCH_ONLY_MODE',
+    })
+  } else {
+    startBriefingWorker()
+    logger.log('[startup] briefing_worker_started')
+  }
   try {
     await integrationService.initialize()
     logger.log('[startup] integration_service_ready')

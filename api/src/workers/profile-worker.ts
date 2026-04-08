@@ -1,4 +1,5 @@
 import { profileUpdateService } from '../services/profile/profile-update.service'
+import { backgroundGenerationPriorityService } from '../services/core/background-generation-priority.service'
 import { logger } from '../utils/core/logger.util'
 
 const noMemoriesCooldown = new Map<string, number>()
@@ -39,11 +40,29 @@ export const startProfileWorker = async (
       return { updated: 0, failed: 0 }
     }
 
+    const shouldDeferForSearchPriority =
+      await backgroundGenerationPriorityService.shouldDeferBackgroundGeneration()
+
+    if (shouldDeferForSearchPriority) {
+      logger.log('[Profile Worker] deferring batch because search priority is active', {
+        users: userIds.length,
+      })
+      return { updated: 0, failed: 0, skipped: userIds.length }
+    }
+
     let updated = 0
     let failed = 0
     let skipped = 0
 
     for (const userId of userIds) {
+      const deferForSearchPriority =
+        await backgroundGenerationPriorityService.shouldDeferBackgroundGeneration()
+      if (deferForSearchPriority) {
+        skipped++
+        logger.log(`[Profile Worker] skip search-priority user=${userId}`)
+        continue
+      }
+
       if (isWithinCooldown(userId)) {
         skipped++
         const until = new Date(noMemoriesCooldown.get(userId) || Date.now()).toISOString()

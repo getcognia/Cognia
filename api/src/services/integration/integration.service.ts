@@ -22,7 +22,7 @@ import {
 import Redis from 'ioredis'
 import { logger } from '../../utils/core/logger.util'
 import { prisma } from '../../lib/prisma.lib'
-import { addContentJob } from '../../lib/queue.lib'
+import { addContentJob, type ContentJobData } from '../../lib/queue.lib'
 import { memoryIngestionService } from '../memory/memory-ingestion.service'
 import { memoryMeshService } from '../memory/memory-mesh.service'
 import { getRedisConnection } from '../../utils/core/env.util'
@@ -651,7 +651,7 @@ export class IntegrationService {
           }
 
           // Skip if already synced and not modified
-          if (existingSynced && existingSynced.last_synced_at >= resource.modifiedAt) {
+          if (this.shouldSkipUnchangedResource(existingSynced, resource.modifiedAt)) {
             logger.log(`  [skip] ${resource.name} (unchanged)`)
             skipped++
             continue
@@ -670,17 +670,7 @@ export class IntegrationService {
             continue
           }
 
-          // Create or update memory
-          await this.createMemoryFromContent(content, {
-            userId,
-            organizationId,
-            integrationId: integration.id,
-            integrationType,
-            provider: integration.provider,
-          })
-
-          // Track synced resource
-          await prisma.syncedResource.upsert({
+          const syncedResource = await prisma.syncedResource.upsert({
             where: {
               integration_id_integration_type_external_id: {
                 integration_id: integration.id,
@@ -700,6 +690,16 @@ export class IntegrationService {
               content_hash: content.contentHash,
               last_synced_at: new Date(),
             },
+          })
+
+          // Create or update memory
+          await this.createMemoryFromContent(content, {
+            userId,
+            organizationId,
+            integrationId: integration.id,
+            integrationType,
+            provider: integration.provider,
+            syncedResourceId: syncedResource.id,
           })
 
           logger.log(`  [synced] ${resource.name}`)
@@ -769,13 +769,21 @@ export class IntegrationService {
       integrationId: string
       integrationType: 'user' | 'organization'
       provider: string
+      syncedResourceId?: string | null
     }
   ): Promise<void> {
-    const { userId, organizationId, provider } = context
+    const { userId, organizationId, provider, integrationId, integrationType, syncedResourceId } =
+      context
     const normalizedTimestamp = normalizeUnixTimestampSeconds(content.updatedAt ?? Date.now())
     const normalizedTimestampNumber = normalizeUnixTimestampSecondsNumber(
       content.updatedAt ?? Date.now()
     )
+    const pageMetadata: Prisma.InputJsonValue = {
+      integration_provider: provider,
+      external_id: content.externalId,
+      mime_type: content.mimeType,
+      author: content.author,
+    }
 
     // Canonicalize content for deduplication
     const { canonicalText, canonicalHash } = memoryIngestionService.canonicalizeContent(
@@ -794,33 +802,41 @@ export class IntegrationService {
     })
 
     if (duplicate) {
+      if (syncedResourceId) {
+        await prisma.syncedResource.update({
+          where: { id: syncedResourceId },
+          data: { memory_id: duplicate.memory.id },
+        })
+      }
       logger.log(`    (duplicate of ${duplicate.memory.id})`)
       return
     }
 
     // Try to add to content queue for full processing (embeddings, etc.)
     try {
+      const jobMetadata = {
+        url: content.url,
+        title: content.title,
+        source: provider,
+        source_type: 'INTEGRATION' as const,
+        organization_id: organizationId || undefined,
+        timestamp: normalizedTimestampNumber,
+        integration_id: integrationId,
+        integration_type: integrationType,
+        external_id: content.externalId,
+        synced_resource_id: syncedResourceId || undefined,
+        skip_profile_update: true,
+        page_metadata: pageMetadata as Record<string, unknown>,
+      } as ContentJobData['metadata'] & Record<string, unknown>
+
       await addContentJob({
         user_id: userId,
         raw_text: content.content,
-        metadata: {
-          url: content.url,
-          title: content.title,
-          source: provider,
-          source_type: 'INTEGRATION',
-          organization_id: organizationId || undefined,
-          timestamp: normalizedTimestampNumber,
-        },
+        metadata: jobMetadata,
       })
       logger.log(`    (queued for processing)`)
     } catch {
       // Queue not available, create memory directly with embeddings
-      const pageMetadata: Prisma.InputJsonValue = {
-        integration_provider: provider,
-        external_id: content.externalId,
-        mime_type: content.mimeType,
-        author: content.author,
-      }
       const memory = await prisma.memory.create({
         data: {
           ...memoryIngestionService.buildMemoryCreatePayload({
@@ -834,6 +850,11 @@ export class IntegrationService {
               source_type: SourceType.INTEGRATION,
               organization_id: organizationId || undefined,
               timestamp: normalizedTimestampNumber,
+              integration_id: integrationId,
+              integration_type: integrationType,
+              external_id: content.externalId,
+              synced_resource_id: syncedResourceId || undefined,
+              skip_profile_update: true,
             },
             canonicalText,
             canonicalHash,
@@ -843,6 +864,13 @@ export class IntegrationService {
           timestamp: normalizedTimestamp,
         },
       })
+
+      if (syncedResourceId) {
+        await prisma.syncedResource.update({
+          where: { id: syncedResourceId },
+          data: { memory_id: memory.id },
+        })
+      }
 
       // Generate embeddings in background (non-blocking)
       setImmediate(async () => {
@@ -933,6 +961,20 @@ export class IntegrationService {
       return encrypted
     }
     return tokenEncryptor.decrypt(encrypted)
+  }
+
+  private shouldSkipUnchangedResource(
+    existingSynced: Pick<{
+      last_synced_at: Date
+      memory_id: string | null
+    }, 'last_synced_at' | 'memory_id'> | null,
+    modifiedAt: Date
+  ): boolean {
+    if (!existingSynced?.memory_id) {
+      return false
+    }
+
+    return existingSynced.last_synced_at >= modifiedAt
   }
 
   private getDecryptedTokens(integration: {

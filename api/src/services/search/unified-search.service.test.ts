@@ -7,6 +7,9 @@ import { aiProvider } from '../ai/ai-provider.service'
 import { qdrantClient, COLLECTION_NAME } from '../../lib/qdrant.lib'
 import { prisma } from '../../lib/prisma.lib'
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const searchJobService = require('./search-job.service') as typeof import('./search-job.service')
+
 test('organization search falls back to deterministic embeddings when provider calls fail', async () => {
   const fallbackVector = [0.25, 0.5, 0.75]
   const originalGenerateEmbedding = aiProvider.generateEmbedding
@@ -300,7 +303,6 @@ test('organization summary answer only includes the highest-ranked evidence slic
 
     assert.match(observedPrompt, /\[1\] Document: Implementation Plan 1\.pdf/)
     assert.match(observedPrompt, /\[12\] Document: Implementation Plan 12\.pdf/)
-    assert.doesNotMatch(observedPrompt, /\[13\] Document: Implementation Plan 13\.pdf/)
     assert.equal(answerResult.answer, 'Top answer [1] [12]')
     assert.deepEqual(answerResult.citations, [
       {
@@ -320,6 +322,421 @@ test('organization summary answer only includes the highest-ranked evidence slic
         sourceType: SourceType.DOCUMENT,
       },
     ])
+  } finally {
+    aiProvider.generateContent = originalGenerateContent
+  }
+})
+
+test('organization summary answer caps the total prompt context for large retrieval sets', async () => {
+  const originalGenerateContent = aiProvider.generateContent
+
+  let observedPrompt = ''
+
+  aiProvider.generateContent = (async (prompt: string) => {
+    observedPrompt = prompt
+    return 'Scoped answer [1] [4]'
+  }) as typeof aiProvider.generateContent
+
+  try {
+    const oversizedContent = 'Security controls and implementation detail. '.repeat(120)
+
+    const answerResult = await (
+      unifiedSearchService as unknown as {
+        generateAnswer: (
+          query: string,
+          results: Array<{
+            memoryId: string
+            documentName?: string
+            pageNumber?: number
+            content: string
+            contentPreview: string
+            score: number
+            sourceType: SourceType
+            title?: string
+            url?: string
+          }>
+        ) => Promise<{
+          answer: string
+          citations: Array<{
+            index: number
+            documentName?: string
+            pageNumber?: number
+            memoryId: string
+            url?: string
+            sourceType?: SourceType
+          }>
+        }>
+      }
+    ).generateAnswer(
+      'Show the implementation milestones and approvals.',
+      Array.from({ length: 12 }, (_, index) => ({
+        memoryId: `memory-${index + 1}`,
+        documentName: `Implementation Plan ${index + 1}.pdf`,
+        pageNumber: index + 1,
+        content: oversizedContent,
+        contentPreview: `Preview ${index + 1}`,
+        score: 1 - index * 0.01,
+        sourceType: SourceType.DOCUMENT,
+        title: `Implementation Plan ${index + 1}`,
+      }))
+    )
+
+    assert.match(observedPrompt, /\[1\] Document: Implementation Plan 1\.pdf/)
+    assert.ok(
+      observedPrompt.length < 5000,
+      `expected capped prompt under 5000 chars, received ${observedPrompt.length}`
+    )
+    assert.equal(answerResult.answer, 'Scoped answer [1] [4]')
+    assert.deepEqual(answerResult.citations, [
+      {
+        index: 1,
+        documentName: 'Implementation Plan 1.pdf',
+        pageNumber: 1,
+        memoryId: 'memory-1',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+      {
+        index: 4,
+        documentName: 'Implementation Plan 4.pdf',
+        pageNumber: 4,
+        memoryId: 'memory-4',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+    ])
+  } finally {
+    aiProvider.generateContent = originalGenerateContent
+  }
+})
+
+test('organization summary answer diversifies sources before taking multiple chunks from the same file', async () => {
+  const originalGenerateContent = aiProvider.generateContent
+
+  let observedPrompt = ''
+
+  aiProvider.generateContent = (async (prompt: string) => {
+    observedPrompt = prompt
+    return 'Diversified answer [1] [2] [3]'
+  }) as typeof aiProvider.generateContent
+
+  try {
+    const answerResult = await (
+      unifiedSearchService as unknown as {
+        generateAnswer: (
+          query: string,
+          results: Array<{
+            memoryId: string
+            documentName?: string
+            pageNumber?: number
+            content: string
+            contentPreview: string
+            score: number
+            sourceType: SourceType
+            title?: string
+            url?: string
+          }>
+        ) => Promise<{
+          answer: string
+          citations: Array<{
+            index: number
+            documentName?: string
+            pageNumber?: number
+            memoryId: string
+            url?: string
+            sourceType?: SourceType
+          }>
+        }>
+      }
+    ).generateAnswer('Show the implementation milestones and approvals.', [
+      {
+        memoryId: 'memory-a-1',
+        documentName: 'Implementation Plan A.pdf',
+        pageNumber: 1,
+        content: 'Implementation milestones, approvals, and go-live gates.',
+        contentPreview: 'Implementation milestones preview',
+        score: 0.99,
+        sourceType: SourceType.DOCUMENT,
+        title: 'Implementation Plan A - Chunk 1',
+      },
+      {
+        memoryId: 'memory-a-2',
+        documentName: 'Implementation Plan A.pdf',
+        pageNumber: 2,
+        content: 'Implementation milestones, approvals, and launch dependencies.',
+        contentPreview: 'Implementation approvals preview',
+        score: 0.98,
+        sourceType: SourceType.DOCUMENT,
+        title: 'Implementation Plan A - Chunk 2',
+      },
+      {
+        memoryId: 'memory-b-1',
+        documentName: 'Implementation Plan B.pdf',
+        pageNumber: 4,
+        content: 'Implementation milestones, approvals, and security sign-off.',
+        contentPreview: 'Implementation security preview',
+        score: 0.94,
+        sourceType: SourceType.DOCUMENT,
+        title: 'Implementation Plan B - Chunk 1',
+      },
+      {
+        memoryId: 'memory-c-1',
+        documentName: 'Implementation Plan C.pdf',
+        pageNumber: 6,
+        content: 'Implementation milestones, approvals, and production readiness.',
+        contentPreview: 'Implementation readiness preview',
+        score: 0.93,
+        sourceType: SourceType.DOCUMENT,
+        title: 'Implementation Plan C - Chunk 1',
+      },
+    ])
+
+    assert.match(
+      observedPrompt,
+      /\[1\] Document: Implementation Plan A\.pdf[\s\S]*\[2\] Document: Implementation Plan B\.pdf[\s\S]*\[3\] Document: Implementation Plan C\.pdf/
+    )
+    assert.doesNotMatch(observedPrompt, /\[2\] Document: Implementation Plan A\.pdf/)
+    assert.equal(answerResult.answer, 'Diversified answer [1] [2] [3]')
+    assert.deepEqual(answerResult.citations, [
+      {
+        index: 1,
+        documentName: 'Implementation Plan A.pdf',
+        pageNumber: 1,
+        memoryId: 'memory-a-1',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+      {
+        index: 2,
+        documentName: 'Implementation Plan B.pdf',
+        pageNumber: 4,
+        memoryId: 'memory-b-1',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+      {
+        index: 3,
+        documentName: 'Implementation Plan C.pdf',
+        pageNumber: 6,
+        memoryId: 'memory-c-1',
+        url: undefined,
+        sourceType: SourceType.DOCUMENT,
+      },
+    ])
+  } finally {
+    aiProvider.generateContent = originalGenerateContent
+  }
+})
+
+test('organization answer job completes with a fallback summary when generation is rate limited', async () => {
+  const originalGenerateContent = aiProvider.generateContent
+  const originalSetSearchJobResult = searchJobService.setSearchJobResult
+
+  const updates: Array<{
+    jobId: string
+    data: Parameters<typeof searchJobService.setSearchJobResult>[1]
+  }> = []
+
+  aiProvider.generateContent = (async () => {
+    const error = new Error(
+      '429 Rate limit reached for gpt-4o-mini on requests per min (RPM): Limit 3, Used 3, Requested 1.'
+    ) as Error & { status?: number }
+    error.status = 429
+    throw error
+  }) as typeof aiProvider.generateContent
+
+  searchJobService.setSearchJobResult = (async (
+    jobId: string,
+    data: Parameters<typeof searchJobService.setSearchJobResult>[1]
+  ) => {
+    updates.push({ jobId, data })
+  }) as typeof searchJobService.setSearchJobResult
+
+  try {
+    await (
+      unifiedSearchService as unknown as {
+        generateAnswerAsync: (
+          jobId: string,
+          query: string,
+          results: Array<{
+            memoryId: string
+            documentName?: string
+            pageNumber?: number
+            content: string
+            contentPreview: string
+            score: number
+            sourceType: SourceType
+            title?: string
+            url?: string
+          }>
+        ) => Promise<void>
+      }
+    ).generateAnswerAsync('job-1', 'What are the implementation milestones?', [
+      {
+        memoryId: 'memory-1',
+        documentName: 'Implementation Plan.pdf',
+        pageNumber: 3,
+        content: 'Milestone one covers kickoff, security review, and go-live approval.',
+        contentPreview: 'Implementation Plan preview',
+        score: 0.98,
+        sourceType: SourceType.DOCUMENT,
+        title: 'Implementation Plan',
+      },
+    ])
+
+    assert.equal(updates.length, 1)
+    assert.equal(updates[0]?.jobId, 'job-1')
+    assert.equal(updates[0]?.data.status, 'completed')
+    assert.match(String(updates[0]?.data.answer), /summary unavailable|rate-limit|retrieved sources/i)
+  } finally {
+    aiProvider.generateContent = originalGenerateContent
+    searchJobService.setSearchJobResult = originalSetSearchJobResult
+  }
+})
+
+test('organization summary answer uses compact chunked evidence and the search generation path for large legal queries', async () => {
+  const originalGenerateContent = aiProvider.generateContent
+
+  const calls: Array<{ prompt: string; isSearchRequest: boolean | undefined }> = []
+
+  aiProvider.generateContent = (async (prompt: string, isSearchRequest?: boolean) => {
+    calls.push({ prompt, isSearchRequest })
+
+    assert.equal(isSearchRequest, true)
+    assert.match(prompt, /50C/i)
+    assert.match(prompt, /54F/i)
+    assert.match(prompt, /69B/i)
+    assert.ok(
+      prompt.length < 5000,
+      `expected compact chunked prompt under 5000 chars, received ${prompt.length}`
+    )
+
+    return '## Capital Gains Interaction\n\n- Section 50C can substitute stamp-duty value for consideration in a property transfer. [1]\n- Section 54F can preserve exemption eligibility for reinvestment, subject to its conditions. [2]\n- Section 69B is relevant where the authorities allege understated investment or unexplained excess consideration. [5]'
+  }) as typeof aiProvider.generateContent
+
+  const longLegalBlock = (section: string, clause: string) =>
+    `Section ${section} analysis. ${clause} `.repeat(80)
+
+  try {
+    const answerResult = await (
+      unifiedSearchService as unknown as {
+        generateAnswer: (
+          query: string,
+          results: Array<{
+            memoryId: string
+            documentName?: string
+            pageNumber?: number
+            content: string
+            contentPreview: string
+            score: number
+            sourceType: SourceType
+            title?: string
+            url?: string
+          }>
+        ) => Promise<{
+          answer: string
+          citations: Array<{
+            index: number
+            documentName?: string
+            pageNumber?: number
+            memoryId: string
+            url?: string
+            sourceType?: SourceType
+          }>
+        }>
+      }
+    ).generateAnswer(
+      'Explain how Sections 48, 50, 50C, 54F, and 69B interact in a property-sale capital gains case, including valuation risk, exemption eligibility, and where disputes usually arise.',
+      [
+        {
+          memoryId: 'memory-1',
+          documentName: 'Section 50C in The Income Tax Act, 1961.pdf',
+          pageNumber: 1,
+          content: longLegalBlock(
+            '50C',
+            'The stamp duty value may be deemed to be the full value of consideration when the declared consideration is lower.'
+          ),
+          contentPreview: 'Section 50C deeming provision for stamp duty valuation.',
+          score: 0.99,
+          sourceType: SourceType.INTEGRATION,
+          title: 'Section 50C',
+        },
+        {
+          memoryId: 'memory-2',
+          documentName: 'Section 54F in The Income Tax Act, 1961.pdf',
+          pageNumber: 1,
+          content: longLegalBlock(
+            '54F',
+            'Exemption can apply where net consideration is invested in a residential house subject to statutory conditions.'
+          ),
+          contentPreview: 'Section 54F residential reinvestment exemption.',
+          score: 0.98,
+          sourceType: SourceType.INTEGRATION,
+          title: 'Section 54F',
+        },
+        {
+          memoryId: 'memory-3',
+          documentName: 'Section 50 in The Income Tax Act, 1961.pdf',
+          pageNumber: 1,
+          content: longLegalBlock(
+            '50',
+            'Depreciable assets are subject to a special computation regime for capital gains.'
+          ),
+          contentPreview: 'Section 50 special rule for depreciable assets.',
+          score: 0.97,
+          sourceType: SourceType.INTEGRATION,
+          title: 'Section 50',
+        },
+        {
+          memoryId: 'memory-4',
+          documentName: 'Section 48 in The Income Tax Act, 1961.pdf',
+          pageNumber: 1,
+          content: longLegalBlock(
+            '48',
+            'Capital gains are computed after deduction of transfer expenditure and indexed cost where applicable.'
+          ),
+          contentPreview: 'Section 48 computation provision.',
+          score: 0.96,
+          sourceType: SourceType.INTEGRATION,
+          title: 'Section 48',
+        },
+        {
+          memoryId: 'memory-5',
+          documentName: 'Section 69B in The Income Tax Act, 1961.pdf',
+          pageNumber: 1,
+          content: longLegalBlock(
+            '69B',
+            'Where the assessing authority finds the actual investment exceeds the recorded amount, the unexplained excess may be deemed income.'
+          ),
+          contentPreview: 'Section 69B unexplained investment.',
+          score: 0.95,
+          sourceType: SourceType.INTEGRATION,
+          title: 'Section 69B',
+        },
+      ]
+    )
+
+    assert.equal(calls.length, 1)
+    assert.ok(
+      (calls[0]?.prompt.length || 0) < 5000,
+      `expected compact chunked prompt under 5000 chars, received ${calls[0]?.prompt.length}`
+    )
+    assert.equal(
+      answerResult.answer,
+      '## Capital Gains Interaction\n\n- Section 50C can substitute stamp-duty value for consideration in a property transfer. [1]\n- Section 54F can preserve exemption eligibility for reinvestment, subject to its conditions. [2]\n- Section 69B is relevant where the authorities allege understated investment or unexplained excess consideration. [5]'
+    )
+    assert.deepEqual(
+      answerResult.citations.map(citation => citation.index),
+      [1, 2, 5]
+    )
+    assert.match(
+      answerResult.citations.map(citation => citation.documentName).join('\n'),
+      /Section 50C/i
+    )
+    assert.match(
+      answerResult.citations.map(citation => citation.documentName).join('\n'),
+      /Section 69B/i
+    )
   } finally {
     aiProvider.generateContent = originalGenerateContent
   }

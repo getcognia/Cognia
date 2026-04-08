@@ -11,10 +11,14 @@ import {
 } from '../memory/memory-structure.service'
 import { generateQueryEmbedding } from './embedding-search.service'
 import { tokenizeQuery } from './query-processor.service'
+import { isRateLimitError } from '../../utils/core/retry.util'
 
-const ANSWER_CONTEXT_CHARS = 1400
-const ANSWER_CONTEXT_LEAD_CHARS = 220
+const ANSWER_CONTEXT_CHARS = 320
 const MAX_ANSWER_RESULTS = 12
+const MAX_ANSWER_CANDIDATES = 36
+const MAX_ANSWER_CONTEXT_TOTAL_CHARS = 2200
+const MAX_ANSWER_CHUNKS_PER_SOURCE = 2
+const MAX_FALLBACK_CITATIONS = 5
 
 export interface UnifiedSearchOptions {
   organizationId: string
@@ -53,10 +57,132 @@ export interface UnifiedSearchResult {
 }
 
 export class UnifiedSearchService {
-  private getAnswerResults(
+  private getAnswerQueryTerms(query: string): string[] {
+    const semanticTokens = tokenizeQuery(query)
+    const sectionTokens =
+      query
+        .toLowerCase()
+        .match(/\b[a-z]*\d+[a-z]*\b/g)
+        ?.filter(token => token.length >= 2) || []
+
+    return Array.from(new Set([...sectionTokens, ...semanticTokens])).sort((a, b) => {
+      const aHasDigits = /\d/.test(a)
+      const bHasDigits = /\d/.test(b)
+      if (aHasDigits !== bHasDigits) {
+        return aHasDigits ? -1 : 1
+      }
+
+      return b.length - a.length
+    })
+  }
+
+  private getAnswerCandidateResults(
+    query: string,
     results: UnifiedSearchResult['results']
   ): UnifiedSearchResult['results'] {
-    return results.slice(0, MAX_ANSWER_RESULTS)
+    const queryTokens = this.getAnswerQueryTerms(query)
+    const scoredCandidates = results
+      .slice(0, MAX_ANSWER_CANDIDATES)
+      .map((result, index) => ({
+        result,
+        originalIndex: index,
+        sourceKey: this.getAnswerSourceKey(result),
+        score: this.scoreAnswerCandidate(query, queryTokens, result),
+      }))
+
+    const groupedCandidates = new Map<
+      string,
+      Array<{
+        result: UnifiedSearchResult['results'][number]
+        originalIndex: number
+        sourceKey: string
+        score: number
+      }>
+    >()
+
+    for (const candidate of scoredCandidates) {
+      const existingGroup = groupedCandidates.get(candidate.sourceKey) || []
+      existingGroup.push(candidate)
+      groupedCandidates.set(candidate.sourceKey, existingGroup)
+    }
+
+    const orderedGroups = Array.from(groupedCandidates.values())
+      .map(group =>
+        group.sort((a, b) => {
+          if (b.score !== a.score) {
+            return b.score - a.score
+          }
+
+          return a.originalIndex - b.originalIndex
+        })
+      )
+      .sort((a, b) => {
+        if (b[0].score !== a[0].score) {
+          return b[0].score - a[0].score
+        }
+
+        return a[0].originalIndex - b[0].originalIndex
+      })
+
+    const selectedResults: UnifiedSearchResult['results'] = []
+
+    for (let round = 0; round < MAX_ANSWER_CHUNKS_PER_SOURCE; round += 1) {
+      for (const group of orderedGroups) {
+        const candidate = group[round]
+        if (!candidate) {
+          continue
+        }
+
+        selectedResults.push(candidate.result)
+        if (selectedResults.length >= MAX_ANSWER_RESULTS) {
+          return selectedResults
+        }
+      }
+    }
+
+    return selectedResults
+  }
+
+  private getAnswerResults(
+    query: string,
+    results: UnifiedSearchResult['results']
+  ): Array<{
+    result: UnifiedSearchResult['results'][number]
+    sourceLabel: string
+    contextSnippet: string
+  }> {
+    const answerCandidates = this.getAnswerCandidateResults(query, results)
+    const selectedResults: Array<{
+      result: UnifiedSearchResult['results'][number]
+      sourceLabel: string
+      contextSnippet: string
+    }> = []
+
+    let totalContextChars = 0
+
+    for (const [index, result] of answerCandidates.entries()) {
+      const sourceLabel = result.documentName
+        ? `[${index + 1}] Document: ${result.documentName}${result.pageNumber ? ` (Page ${result.pageNumber})` : ''}`
+        : `[${index + 1}] ${result.title || 'Memory'}`
+      const contextSnippet = this.buildAnswerContextSnippet(query, result)
+      const entryLength = sourceLabel.length + contextSnippet.length + 2
+
+      if (
+        selectedResults.length > 0 &&
+        totalContextChars + entryLength > MAX_ANSWER_CONTEXT_TOTAL_CHARS
+      ) {
+        break
+      }
+
+      selectedResults.push({
+        result,
+        sourceLabel,
+        contextSnippet,
+      })
+      totalContextChars += entryLength
+    }
+
+    return selectedResults
   }
 
   private buildAnswerContextSnippet(
@@ -70,34 +196,124 @@ export class UnifiedSearchService {
       return normalizedPreview
     }
 
-    const queryTokens = tokenizeQuery(query)
-    const lowerContent = normalizedContent.toLowerCase()
-    const firstMatchIndex = queryTokens.reduce((closestIndex, token) => {
-      const matchIndex = lowerContent.indexOf(token)
-      if (matchIndex === -1) {
-        return closestIndex
-      }
+    const queryTokens = this.getAnswerQueryTerms(query)
+    const sentences = normalizedContent
+      .split(/(?<=[.!?])\s+/)
+      .map(sentence => sentence.trim())
+      .filter(Boolean)
 
-      if (closestIndex === -1) {
-        return matchIndex
-      }
-
-      return Math.min(closestIndex, matchIndex)
-    }, -1)
-
-    if (firstMatchIndex === -1) {
-      if (normalizedContent.length <= ANSWER_CONTEXT_CHARS) {
-        return normalizedContent
-      }
-
-      return `${normalizedContent.slice(0, ANSWER_CONTEXT_CHARS).trim()}...`
+    if (sentences.length === 0) {
+      return normalizedContent.slice(0, ANSWER_CONTEXT_CHARS)
     }
 
-    const start = Math.max(firstMatchIndex - ANSWER_CONTEXT_LEAD_CHARS, 0)
-    const end = Math.min(start + ANSWER_CONTEXT_CHARS, normalizedContent.length)
-    const excerpt = normalizedContent.slice(start, end).trim()
+    const matchingIndexes = sentences
+      .map((sentence, index) => {
+        const lowerSentence = sentence.toLowerCase()
+        const matchedToken = queryTokens.find(token => lowerSentence.includes(token))
+        return matchedToken ? index : -1
+      })
+      .filter(index => index >= 0)
 
-    return `${start > 0 ? '...' : ''}${excerpt}${end < normalizedContent.length ? '...' : ''}`
+    if (matchingIndexes.length === 0) {
+      return this.truncateAnswerSnippet(sentences.slice(0, 2).join(' '))
+    }
+
+    const windows: string[] = []
+    const seenIndexes = new Set<number>()
+    const selectedMatches = Array.from(new Set(matchingIndexes)).slice(0, 2)
+
+    for (const matchIndex of selectedMatches) {
+      const start = Math.max(matchIndex - 1, 0)
+      const end = Math.min(matchIndex + 2, sentences.length)
+
+      for (let index = start; index < end; index += 1) {
+        if (seenIndexes.has(index)) {
+          continue
+        }
+
+        seenIndexes.add(index)
+        windows.push(sentences[index])
+      }
+    }
+
+    return this.truncateAnswerSnippet(windows.join(' '))
+  }
+
+  private truncateAnswerSnippet(snippet: string): string {
+    const normalizedSnippet = snippet.trim()
+    if (normalizedSnippet.length <= ANSWER_CONTEXT_CHARS) {
+      return normalizedSnippet
+    }
+
+    return `${normalizedSnippet.slice(0, ANSWER_CONTEXT_CHARS).trim()}...`
+  }
+
+  private getAnswerSourceKey(result: UnifiedSearchResult['results'][number]): string {
+    const sourceKey = (
+      result.documentId ||
+      result.documentName ||
+      result.url ||
+      result.title ||
+      result.memoryId
+    ).trim()
+
+    return sourceKey.toLowerCase()
+  }
+
+  private scoreAnswerCandidate(
+    query: string,
+    queryTokens: string[],
+    result: UnifiedSearchResult['results'][number]
+  ): number {
+    const queryText = query.trim().toLowerCase()
+    const labelText = `${result.documentName || ''} ${result.title || ''}`.toLowerCase()
+    const previewText = `${result.contentPreview || ''} ${result.content || ''}`.toLowerCase()
+
+    const labelHits = queryTokens.reduce((count, token) => {
+      return count + (labelText.includes(token) ? 1 : 0)
+    }, 0)
+    const previewHits = queryTokens.reduce((count, token) => {
+      return count + (previewText.includes(token) ? 1 : 0)
+    }, 0)
+    const exactQueryMatch = queryText.length > 0 && previewText.includes(queryText) ? 1 : 0
+
+    return result.score * 1000 + labelHits * 120 + previewHits * 30 + exactQueryMatch * 180
+  }
+
+  private buildFallbackAnswer(
+    error: unknown,
+    results: UnifiedSearchResult['results']
+  ): { answer: string; citations: UnifiedSearchResult['citations'] } {
+    const message =
+      error instanceof Error && error.message ? error.message.toLowerCase() : String(error).toLowerCase()
+
+    let reasonLine = 'The AI summary could not be generated right now.'
+    if (message.includes('request too large') || message.includes('tokens per min')) {
+      reasonLine = 'The AI summary is temporarily unavailable because the retrieved context exceeded the provider limit.'
+    } else if (isRateLimitError(error) || message.includes('rate limit')) {
+      reasonLine = 'The AI summary is temporarily unavailable because the provider is rate-limited.'
+    } else if (message.includes('timeout')) {
+      reasonLine = 'The AI summary is temporarily unavailable because the provider timed out.'
+    }
+
+    const fallbackCitations = results.slice(0, MAX_FALLBACK_CITATIONS).map((result, index) => ({
+      index: index + 1,
+      documentName: result.documentName || result.title,
+      pageNumber: result.pageNumber,
+      memoryId: result.memoryId,
+      url: result.url,
+      sourceType: result.sourceType,
+    }))
+
+    const citationLine =
+      fallbackCitations.length > 0
+        ? `Top retrieved sources: ${fallbackCitations.map(citation => `[${citation.index}]`).join(' ')}`
+        : 'Retrieved sources are still available below for direct review.'
+
+    return {
+      answer: `## Summary Unavailable\n\n- ${reasonLine}\n- Retrieved sources are still available below for direct review.\n- ${citationLine}`,
+      citations: fallbackCitations,
+    }
   }
 
   private async resolveResultLimits(options: {
@@ -300,7 +516,7 @@ export class UnifiedSearchService {
 
     if (includeAnswer && results.length > 0 && userId) {
       try {
-        const answerResults = this.getAnswerResults(results)
+        const answerResults = this.getAnswerCandidateResults(query, results)
         // Create a job for answer generation (await to ensure it's stored before returning)
         const job = await createSearchJob(userId)
         answerJobId = job.id
@@ -344,14 +560,11 @@ export class UnifiedSearchService {
     query: string,
     results: UnifiedSearchResult['results']
   ): Promise<{ answer: string; citations: UnifiedSearchResult['citations'] }> {
-    const answerResults = this.getAnswerResults(results)
+    const answerResults = this.getAnswerResults(query, results)
 
     // Build context with numbered references
-    const contextParts = answerResults.map((result, index) => {
-      const source = result.documentName
-        ? `[${index + 1}] Document: ${result.documentName}${result.pageNumber ? ` (Page ${result.pageNumber})` : ''}`
-        : `[${index + 1}] ${result.title || 'Memory'}`
-      return `${source}\n${this.buildAnswerContextSnippet(query, result)}`
+    const contextParts = answerResults.map(({ sourceLabel, contextSnippet }) => {
+      return `${sourceLabel}\n${contextSnippet}`
     })
 
     const context = contextParts.join('\n\n')
@@ -374,7 +587,7 @@ Instructions:
 
 Answer:`
 
-    const response = await aiProvider.generateContent(prompt)
+    const response = await aiProvider.generateContent(prompt, true)
 
     // Extract citations from the answer
     const citationMatches = response.match(/\[(\d+)\]/g) || []
@@ -384,11 +597,11 @@ Answer:`
       .filter(n => n > 0 && n <= answerResults.length)
       .map(n => ({
         index: n,
-        documentName: answerResults[n - 1].documentName || answerResults[n - 1].title,
-        pageNumber: answerResults[n - 1].pageNumber,
-        memoryId: answerResults[n - 1].memoryId,
-        url: answerResults[n - 1].url,
-        sourceType: answerResults[n - 1].sourceType,
+        documentName: answerResults[n - 1].result.documentName || answerResults[n - 1].result.title,
+        pageNumber: answerResults[n - 1].result.pageNumber,
+        memoryId: answerResults[n - 1].result.memoryId,
+        url: answerResults[n - 1].result.url,
+        sourceType: answerResults[n - 1].result.sourceType,
       }))
 
     return { answer: response, citations }
@@ -436,8 +649,17 @@ Answer:`
         elapsed: `${elapsed}s`,
         error: error instanceof Error ? error.message : String(error),
       })
+      const fallbackAnswer = this.buildFallbackAnswer(error, results)
       await setSearchJobResult(jobId, {
-        status: 'failed',
+        answer: fallbackAnswer.answer,
+        citations: fallbackAnswer.citations?.map(citation => ({
+          label: citation.index,
+          memory_id: citation.memoryId,
+          title: citation.documentName || null,
+          url: citation.url || null,
+          source_type: citation.sourceType || null,
+        })),
+        status: 'completed',
       })
     }
   }

@@ -5,6 +5,7 @@ import { memoryIngestionService } from '../../services/memory/memory-ingestion.s
 import { memoryMeshService } from '../../services/memory/memory-mesh.service'
 import { profileUpdateService } from '../../services/profile/profile-update.service'
 import { auditLogService } from '../../services/core/audit-log.service'
+import { backgroundGenerationPriorityService } from '../../services/core/background-generation-priority.service'
 import { logger } from '../../utils/core/logger.util'
 import { createHash } from 'crypto'
 
@@ -18,6 +19,17 @@ type PrismaError = {
 }
 
 const PROFILE_IMPORTANCE_THRESHOLD = Number(process.env.PROFILE_IMPORTANCE_THRESHOLD || 0.7)
+
+const isSearchPriorityLeaseActive = async (): Promise<boolean> => {
+  try {
+    return await backgroundGenerationPriorityService.shouldDeferBackgroundGeneration()
+  } catch (error) {
+    logger.warn('[memory/process] search-priority lease check failed, continuing', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
 
 export class MemoryProcessingController {
   static async processRawContent(req: AuthenticatedRequest, res: Response) {
@@ -208,6 +220,13 @@ export class MemoryProcessingController {
 
         try {
           if ((memory.importance_score || 0) >= PROFILE_IMPORTANCE_THRESHOLD) {
+            if (await isSearchPriorityLeaseActive()) {
+              logger.log('[memory/process] profile update deferred for search priority lease', {
+                memoryId: memory.id,
+                userId,
+              })
+              return
+            }
             const shouldUpdate = await profileUpdateService.shouldUpdateProfile(userId, 3)
             if (shouldUpdate) {
               logger.log('[memory/process] profile_update_triggered', {

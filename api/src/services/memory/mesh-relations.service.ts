@@ -353,66 +353,89 @@ export class MeshRelationsService {
 
       await this.cleanupLowQualityRelations(memoryId)
 
-      const relationPromises = filteredRelations.map(async relatedMemory => {
-        try {
-          const relatedMemoryId = relatedMemory.memory.id
-          const existingRelation = await prisma.memoryRelation.findUnique({
-            where: {
-              memory_id_related_memory_id: {
-                memory_id: memoryId,
-                related_memory_id: relatedMemoryId,
-              },
-            },
-          })
+      const desiredRelations = filteredRelations.map(relatedMemory => ({
+        relatedMemoryId: relatedMemory.memory.id,
+        similarityScore: relatedMemory.similarity_score || relatedMemory.similarity,
+        relationType:
+          (relatedMemory.relation_type as RelationType) || RelationType.semantic,
+      }))
 
-          if (!existingRelation) {
-            try {
-              await prisma.memoryRelation.create({
-                data: {
-                  memory_id: memoryId,
-                  related_memory_id: relatedMemoryId,
-                  similarity_score: relatedMemory.similarity_score || relatedMemory.similarity,
-                  relation_type:
-                    (relatedMemory.relation_type as RelationType) || RelationType.semantic,
-                },
-              })
-            } catch (createError: unknown) {
-              if (
-                createError instanceof Prisma.PrismaClientKnownRequestError &&
-                createError.code === 'P2002'
-              ) {
-                return
-              }
-              throw createError
-            }
-          } else {
-            const similarityScore = relatedMemory.similarity_score || relatedMemory.similarity
-            const relationType =
-              (relatedMemory.relation_type as RelationType) || RelationType.semantic
-            const shouldUpdate =
-              similarityScore > existingRelation.similarity_score + 0.05 ||
-              (similarityScore > existingRelation.similarity_score &&
-                this.isMoreSpecificRelationType(relationType, existingRelation.relation_type))
-
-            if (shouldUpdate) {
-              await prisma.memoryRelation.update({
-                where: { id: existingRelation.id },
-                data: {
-                  similarity_score: similarityScore,
-                  relation_type: relationType,
-                },
-              })
-            }
-          }
-        } catch (error: unknown) {
-          if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-            return
-          }
-          throw error
-        }
+      const existingRelations = await prisma.memoryRelation.findMany({
+        where: {
+          memory_id: memoryId,
+          related_memory_id: { in: desiredRelations.map(relation => relation.relatedMemoryId) },
+        },
+        select: {
+          id: true,
+          related_memory_id: true,
+          similarity_score: true,
+          relation_type: true,
+        },
       })
 
-      await Promise.all(relationPromises)
+      const existingByRelatedId = new Map(
+        existingRelations.map(relation => [relation.related_memory_id, relation])
+      )
+
+      const relationsToCreate: Array<{
+        memory_id: string
+        related_memory_id: string
+        similarity_score: number
+        relation_type: RelationType
+      }> = []
+
+      const relationUpdatePromises = desiredRelations.flatMap(relation => {
+        const existingRelation = existingByRelatedId.get(relation.relatedMemoryId)
+
+        if (!existingRelation) {
+          relationsToCreate.push({
+            memory_id: memoryId,
+            related_memory_id: relation.relatedMemoryId,
+            similarity_score: relation.similarityScore,
+            relation_type: relation.relationType,
+          })
+          return []
+        }
+
+        const shouldUpdate =
+          relation.similarityScore > existingRelation.similarity_score + 0.05 ||
+          (relation.similarityScore > existingRelation.similarity_score &&
+            this.isMoreSpecificRelationType(relation.relationType, existingRelation.relation_type))
+
+        if (!shouldUpdate) {
+          return []
+        }
+
+        return [
+          prisma.memoryRelation.update({
+            where: { id: existingRelation.id },
+            data: {
+              similarity_score: relation.similarityScore,
+              relation_type: relation.relationType,
+            },
+          }),
+        ]
+      })
+
+      if (relationsToCreate.length > 0) {
+        try {
+          await prisma.memoryRelation.createMany({
+            data: relationsToCreate,
+            skipDuplicates: true,
+          })
+        } catch (createError: unknown) {
+          if (
+            createError instanceof Prisma.PrismaClientKnownRequestError &&
+            createError.code === 'P2002'
+          ) {
+            // Another worker already inserted the same relation.
+          } else {
+            throw createError
+          }
+        }
+      }
+
+      await Promise.all(relationUpdatePromises)
     } catch (error) {
       logger.error(`Error creating memory relations for ${memoryId}:`, error)
       throw error

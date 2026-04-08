@@ -4,7 +4,12 @@ import { openaiService } from './openai.service'
 import { tokenTracking } from '../core/token-tracking.service'
 import { retryWithBackoff, isRateLimitError, sleep } from '../../utils/core/retry.util'
 import { logger } from '../../utils/core/logger.util'
-import { getGenerationProvider, getOllamaBaseUrl, getOllamaGenerationModel } from './ai-config'
+import {
+  getGenerationProvider,
+  getOllamaBaseUrl,
+  getOllamaGenerationModel,
+  isOpenAISearchOnlyModeEnabled,
+} from './ai-config'
 
 interface ApiError {
   status?: number
@@ -40,6 +45,10 @@ export function shouldRetryGenerationError(error: unknown): boolean {
   return status === 503 || status === 502
 }
 
+function shouldReserveOpenAIForSearch(isSearchRequest: boolean): boolean {
+  return isOpenAISearchOnlyModeEnabled() && !isSearchRequest
+}
+
 export class GenerationProviderService {
   async generateContent(
     prompt: string,
@@ -51,6 +60,14 @@ export class GenerationProviderService {
     let result: string
     let modelUsed: string | undefined
     const genProvider = getGenerationProvider()
+
+    if (shouldReserveOpenAIForSearch(isSearchRequest)) {
+      const error = new Error(
+        'OpenAI generation is reserved for search requests while OPENAI_SEARCH_ONLY_MODE is enabled.'
+      ) as Error & { status?: number }
+      error.status = 503
+      throw error
+    }
 
     if (genProvider === 'openai' || genProvider === 'hybrid') {
       try {

@@ -19,6 +19,11 @@ export interface ContentJobData {
     tags?: string[]
     key_topics?: string[]
     memory_id?: string
+    synced_resource_id?: string
+    integration_id?: string
+    integration_type?: 'user' | 'organization'
+    external_id?: string
+    skip_profile_update?: boolean
     source?: string
     source_type?: 'EXTENSION' | 'BROWSER' | 'MANUAL' | 'REASONING' | 'INTEGRATION'
     organization_id?: string

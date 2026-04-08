@@ -39,6 +39,11 @@ export function getGenerationProvider(): AIProvider {
   return resolveProvider(process.env.GEN_PROVIDER || process.env.AI_PROVIDER)
 }
 
+export function isOpenAISearchOnlyModeEnabled(): boolean {
+  const rawValue = process.env.OPENAI_SEARCH_ONLY_MODE?.trim().toLowerCase()
+  return rawValue === '1' || rawValue === 'true' || rawValue === 'yes' || rawValue === 'on'
+}
+
 export function getOpenAIApiKey(): string | undefined {
   return process.env.OPENAI_API_KEY
 }
