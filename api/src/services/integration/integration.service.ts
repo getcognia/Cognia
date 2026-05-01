@@ -33,8 +33,13 @@ import {
 } from '../../utils/core/timestamp.util'
 
 // Token encryption key from environment
-const ENCRYPTION_KEY = process.env.TOKEN_ENCRYPTION_KEY || ''
-const tokenEncryptor = ENCRYPTION_KEY ? createTokenEncryptor(ENCRYPTION_KEY) : null
+const ENCRYPTION_KEY = process.env.TOKEN_ENCRYPTION_KEY
+if (!ENCRYPTION_KEY) {
+  throw new Error(
+    'FATAL: TOKEN_ENCRYPTION_KEY is not set. Application cannot start without an integration token encryption key.'
+  )
+}
+const tokenEncryptor = createTokenEncryptor(ENCRYPTION_KEY)
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback
 const SYNC_PAGE_LIMIT = 50
@@ -990,25 +995,21 @@ export class IntegrationService {
   // ============ Private helpers ============
 
   private encryptToken(token: string): string {
-    if (!tokenEncryptor) {
-      logger.warn('Token encryption key not configured - storing tokens unencrypted')
-      return token
-    }
     return tokenEncryptor.encrypt(token)
   }
 
   private decryptToken(encrypted: string): string {
-    if (!tokenEncryptor) {
-      return encrypted
-    }
     return tokenEncryptor.decrypt(encrypted)
   }
 
   private shouldSkipUnchangedResource(
-    existingSynced: Pick<{
-      last_synced_at: Date
-      memory_id: string | null
-    }, 'last_synced_at' | 'memory_id'> | null,
+    existingSynced: Pick<
+      {
+        last_synced_at: Date
+        memory_id: string | null
+      },
+      'last_synced_at' | 'memory_id'
+    > | null,
     modifiedAt: Date
   ): boolean {
     if (!existingSynced?.memory_id) {

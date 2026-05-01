@@ -135,11 +135,15 @@ export async function getOrganizationDocuments(
 
 export async function uploadDocument(
   slug: string,
-  file: File
+  file: File,
+  metadata?: Record<string, unknown>
 ): Promise<Document> {
   requireAuthToken()
   const formData = new FormData()
   formData.append("file", file)
+  if (metadata) {
+    formData.append("metadata", JSON.stringify(metadata))
+  }
 
   const { axiosInstance } = await import("../../utils/http")
   const response = await axiosInstance.post(
@@ -260,6 +264,8 @@ export interface AnswerJobResult {
     title: string | null
     url: string | null
     source_type: string | null
+    author_email?: string | null
+    captured_at?: string | null
   }>
 }
 

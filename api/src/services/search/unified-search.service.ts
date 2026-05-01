@@ -1,5 +1,5 @@
 import { prisma } from '../../lib/prisma.lib'
-import { qdrantClient, COLLECTION_NAME, ensureCollection } from '../../lib/qdrant.lib'
+import { ensureCollection } from '../../lib/qdrant.lib'
 import { aiProvider } from '../ai/ai-provider.service'
 import { logger } from '../../utils/core/logger.util'
 import { SourceType } from '@prisma/client'
@@ -10,8 +10,12 @@ import {
   normalizePageMetadata,
 } from '../memory/memory-structure.service'
 import { generateQueryEmbedding } from './embedding-search.service'
+import { hybridSearch, type HybridSearchHit } from './hybrid-search.service'
+import { rerankProvider } from './rerank-provider.service'
+import { searchCache } from './search-cache.service'
 import { tokenizeQuery } from './query-processor.service'
 import { isRateLimitError } from '../../utils/core/retry.util'
+import { SEARCH_CONSTANTS } from '../../utils/core/constants.util'
 
 const ANSWER_CONTEXT_CHARS = 320
 const MAX_ANSWER_RESULTS = 12
@@ -23,7 +27,12 @@ const MAX_FALLBACK_CITATIONS = 5
 type PublicSearchResult = UnifiedSearchResult['results'][number]
 type InternalSearchResult = PublicSearchResult & {
   answerContent: string
+  metadata?: Record<string, unknown>
+  authorEmail?: string | null
+  capturedAt?: string | null
 }
+
+const SEARCH_METADATA_KEYS = ['tags'] as const
 
 export interface UnifiedSearchOptions {
   organizationId: string
@@ -48,6 +57,7 @@ export interface UnifiedSearchResult {
     sourceType: SourceType
     title?: string
     url?: string
+    metadata?: Record<string, unknown>
   }>
   answer?: string
   citations?: Array<{
@@ -57,12 +67,37 @@ export interface UnifiedSearchResult {
     memoryId: string
     url?: string
     sourceType?: SourceType
+    authorEmail?: string | null
+    capturedAt?: string | null
   }>
   totalResults: number
   answerJobId?: string // Job ID for async answer generation
 }
 
 export class UnifiedSearchService {
+  private pickResultMetadata(
+    pageMetadata: Record<string, unknown>
+  ): Record<string, unknown> | undefined {
+    const metadataEntries = SEARCH_METADATA_KEYS.flatMap(key => {
+      const value = pageMetadata[key]
+      if (value === undefined || value === null) {
+        return []
+      }
+
+      if (typeof value === 'string' && !value.trim()) {
+        return []
+      }
+
+      if (Array.isArray(value) && value.length === 0) {
+        return []
+      }
+
+      return [[key, value] as const]
+    })
+
+    return metadataEntries.length > 0 ? Object.fromEntries(metadataEntries) : undefined
+  }
+
   private getAnswerQueryTerms(query: string): string[] {
     const semanticTokens = tokenizeQuery(query)
     const sectionTokens =
@@ -87,14 +122,12 @@ export class UnifiedSearchService {
     results: InternalSearchResult[]
   ): InternalSearchResult[] {
     const queryTokens = this.getAnswerQueryTerms(query)
-    const scoredCandidates = results
-      .slice(0, MAX_ANSWER_CANDIDATES)
-      .map((result, index) => ({
-        result,
-        originalIndex: index,
-        sourceKey: this.getAnswerSourceKey(result),
-        score: this.scoreAnswerCandidate(query, queryTokens, result),
-      }))
+    const scoredCandidates = results.slice(0, MAX_ANSWER_CANDIDATES).map((result, index) => ({
+      result,
+      originalIndex: index,
+      sourceKey: this.getAnswerSourceKey(result),
+      score: this.scoreAnswerCandidate(query, queryTokens, result),
+    }))
 
     const groupedCandidates = new Map<
       string,
@@ -191,14 +224,9 @@ export class UnifiedSearchService {
     return selectedResults
   }
 
-  private buildAnswerContextSnippet(
-    query: string,
-    result: InternalSearchResult
-  ): string {
+  private buildAnswerContextSnippet(query: string, result: InternalSearchResult): string {
     const normalizedContent = result.content.replace(/\s+/g, ' ').trim()
-    const normalizedAnswerContent = (result.answerContent || '')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const normalizedAnswerContent = (result.answerContent || '').replace(/\s+/g, ' ').trim()
     const normalizedPreview = result.contentPreview.replace(/\s+/g, ' ').trim()
     const answerSourceContent = normalizedAnswerContent || normalizedContent
 
@@ -343,14 +371,17 @@ export class UnifiedSearchService {
 
   private buildFallbackAnswer(
     error: unknown,
-    results: PublicSearchResult[]
+    results: Array<PublicSearchResult & { authorEmail?: string | null; capturedAt?: string | null }>
   ): { answer: string; citations: UnifiedSearchResult['citations'] } {
     const message =
-      error instanceof Error && error.message ? error.message.toLowerCase() : String(error).toLowerCase()
+      error instanceof Error && error.message
+        ? error.message.toLowerCase()
+        : String(error).toLowerCase()
 
     let reasonLine = 'The AI summary could not be generated right now.'
     if (message.includes('request too large') || message.includes('tokens per min')) {
-      reasonLine = 'The AI summary is temporarily unavailable because the retrieved context exceeded the provider limit.'
+      reasonLine =
+        'The AI summary is temporarily unavailable because the retrieved context exceeded the provider limit.'
     } else if (isRateLimitError(error) || message.includes('rate limit')) {
       reasonLine = 'The AI summary is temporarily unavailable because the provider is rate-limited.'
     } else if (message.includes('timeout')) {
@@ -364,6 +395,8 @@ export class UnifiedSearchService {
       memoryId: result.memoryId,
       url: result.url,
       sourceType: result.sourceType,
+      authorEmail: result.authorEmail ?? null,
+      capturedAt: result.capturedAt ?? null,
     }))
 
     const citationLine =
@@ -377,52 +410,21 @@ export class UnifiedSearchService {
     }
   }
 
-  private async resolveResultLimits(options: {
-    organizationId: string
-    sourceTypes?: SourceType[]
-    requestedLimit?: number
-    userId?: string
-  }): Promise<{
+  private resolveResultLimits(options: { requestedLimit?: number; hasUserContext: boolean }): {
     finalLimit: number
     organizationSearchLimit: number
     userSearchLimit: number
-  }> {
-    const { organizationId, sourceTypes, requestedLimit, userId } = options
-
-    if (
-      typeof requestedLimit === 'number' &&
-      Number.isFinite(requestedLimit) &&
-      requestedLimit > 0
-    ) {
-      const finalLimit = Math.floor(requestedLimit)
-      return {
-        finalLimit,
-        organizationSearchLimit: Math.max(finalLimit * 2, 1),
-        userSearchLimit: Math.max(Math.ceil(finalLimit / 2), 1),
-      }
-    }
-
-    const [organizationResultCount, userResultCount] = await Promise.all([
-      prisma.memory.count({
-        where: {
-          organization_id: organizationId,
-          ...(sourceTypes && sourceTypes.length > 0 ? { source_type: { in: sourceTypes } } : {}),
-        },
-      }),
-      userId
-        ? prisma.memory.count({
-            where: {
-              user_id: userId,
-              source_type: SourceType.EXTENSION,
-            },
-          })
-        : Promise.resolve(0),
-    ])
+  } {
+    const { requestedLimit, hasUserContext } = options
+    const requested =
+      typeof requestedLimit === 'number' && Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(Math.floor(requestedLimit), SEARCH_CONSTANTS.MAX_LIMIT)
+        : SEARCH_CONSTANTS.DEFAULT_LIMIT
 
     return {
-      finalLimit: Math.max(organizationResultCount + userResultCount, 1),
-      organizationSearchLimit: Math.max(organizationResultCount, 1),
-      userSearchLimit: Math.max(userResultCount, 1),
+      finalLimit: requested,
+      organizationSearchLimit: SEARCH_CONSTANTS.FIRST_STAGE_K,
+      userSearchLimit: hasUserContext ? SEARCH_CONSTANTS.USER_STAGE_K : 0,
     }
   }
 
@@ -434,78 +436,53 @@ export class UnifiedSearchService {
 
     await ensureCollection()
 
-    const queryEmbedding = await generateQueryEmbedding(query)
-    const { finalLimit, organizationSearchLimit, userSearchLimit } = await this.resolveResultLimits(
-      {
-        organizationId,
-        sourceTypes,
-        requestedLimit: limit,
-        userId,
-      }
-    )
-
-    // Build Qdrant filter for organization content
-    const orgFilter: {
-      must: Array<{ key: string; match: { value?: string; any?: string[] } }>
-    } = {
-      must: [{ key: 'organization_id', match: { value: organizationId } }],
-    }
-
-    if (sourceTypes && sourceTypes.length > 0) {
-      orgFilter.must.push({
-        key: 'source_type',
-        match: { any: sourceTypes },
-      })
-    }
-
-    // Search organization content
-    const orgSearchResult = await qdrantClient.search(COLLECTION_NAME, {
-      vector: queryEmbedding,
-      filter: orgFilter,
-      limit: organizationSearchLimit,
-      with_payload: true,
-      score_threshold: 0.2,
+    const { finalLimit, organizationSearchLimit, userSearchLimit } = this.resolveResultLimits({
+      requestedLimit: limit,
+      hasUserContext: Boolean(userId),
     })
 
-    // If userId provided, also search user's extension data
-    let userSearchResult: typeof orgSearchResult = []
-    if (userId) {
-      const userFilter: {
-        must: Array<{ key: string; match: { value?: string; any?: string[] } }>
-      } = {
-        must: [
-          { key: 'user_id', match: { value: userId } },
-          { key: 'source_type', match: { any: [SourceType.EXTENSION] } },
-        ],
-      }
+    const cacheKey = searchCache.buildKey({
+      organizationId,
+      userId,
+      query,
+      sourceTypes,
+      finalLimit,
+    })
 
-      userSearchResult = await qdrantClient.search(COLLECTION_NAME, {
-        vector: queryEmbedding,
-        filter: userFilter,
-        limit: userSearchLimit,
-        with_payload: true,
-        score_threshold: 0.25, // Slightly higher threshold for user content
+    const cachedHits = await searchCache.get(cacheKey)
+    let hits: HybridSearchHit[]
+
+    if (cachedHits) {
+      hits = cachedHits
+    } else {
+      const queryEmbedding = await generateQueryEmbedding(query)
+
+      hits = await hybridSearch({
+        organizationId,
+        userId,
+        sourceTypes,
+        query,
+        queryEmbedding,
+        organizationLimit: organizationSearchLimit,
+        userLimit: userSearchLimit,
       })
+
+      if (hits.length > 0) {
+        await searchCache.set(cacheKey, hits)
+      }
     }
 
-    // Combine results
-    const searchResult = [...orgSearchResult, ...userSearchResult]
-
-    if (!searchResult || searchResult.length === 0) {
+    if (hits.length === 0) {
       return {
         results: [],
         totalResults: 0,
       }
     }
 
-    // Extract unique memory IDs
     const memoryScores = new Map<string, number>()
-    for (const result of searchResult) {
-      const memoryId = result.payload?.memory_id as string
-      if (memoryId) {
-        const existingScore = memoryScores.get(memoryId) || 0
-        memoryScores.set(memoryId, Math.max(existingScore, result.score || 0))
-      }
+    for (const hit of hits) {
+      const existingScore = memoryScores.get(hit.memoryId) || 0
+      memoryScores.set(hit.memoryId, Math.max(existingScore, hit.score))
     }
 
     const memoryIds = Array.from(memoryScores.keys())
@@ -520,6 +497,12 @@ export class UnifiedSearchService {
         page_metadata: true,
         source_type: true,
         url: true,
+        created_at: true,
+        user: {
+          select: {
+            email: true,
+          },
+        },
         document_chunks: {
           take: 1,
           select: {
@@ -536,13 +519,13 @@ export class UnifiedSearchService {
       },
     })
 
-    // Build results with document info
-    const internalResults: InternalSearchResult[] = memories
+    const candidateResults: InternalSearchResult[] = memories
       .map(memory => {
         const chunk = memory.document_chunks[0]
         const score = memoryScores.get(memory.id) || 0
         const rawContent = memory.content || ''
         const pageMetadata = normalizePageMetadata(memory.page_metadata)
+        const metadata = this.pickResultMetadata(pageMetadata)
         const representativeExcerpt =
           typeof pageMetadata.representativeExcerpt === 'string'
             ? pageMetadata.representativeExcerpt.replace(/\s+/g, ' ').trim()
@@ -572,15 +555,46 @@ export class UnifiedSearchService {
           sourceType: memory.source_type || SourceType.EXTENSION,
           title: memory.title ?? undefined,
           url: memory.url ?? undefined,
+          metadata,
           answerContent: rawContent,
+          authorEmail: memory.user?.email ?? null,
+          capturedAt: memory.created_at ? memory.created_at.toISOString() : null,
         }
       })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, SEARCH_CONSTANTS.RERANK_CANDIDATES)
+
+    const rerankInputs = candidateResults.map(result => ({
+      id: result.memoryId,
+      text: [result.title, result.contentPreview, result.content]
+        .filter(part => typeof part === 'string' && part.length > 0)
+        .join('\n\n'),
+    }))
+
+    const rerankRanking = await rerankProvider.rerank({
+      query,
+      documents: rerankInputs,
+      topN: finalLimit,
+    })
+
+    const rerankScoreById = new Map(rerankRanking.map(item => [item.id, item.score]))
+    const internalResults: InternalSearchResult[] = candidateResults
+      .map(result => {
+        const newScore = rerankScoreById.get(result.memoryId)
+        if (typeof newScore === 'number') {
+          return { ...result, score: newScore }
+        }
+        return result
+      })
+      .filter(result => rerankScoreById.has(result.memoryId))
       .sort((a, b) => b.score - a.score)
       .slice(0, finalLimit)
 
     const results: PublicSearchResult[] = internalResults.map(result => {
-      const { answerContent, ...publicResult } = result
+      const { answerContent, authorEmail, capturedAt, ...publicResult } = result
       void answerContent
+      void authorEmail
+      void capturedAt
       return publicResult
     })
 
@@ -675,6 +689,8 @@ Answer:`
         memoryId: answerResults[n - 1].result.memoryId,
         url: answerResults[n - 1].result.url,
         sourceType: answerResults[n - 1].result.sourceType,
+        authorEmail: answerResults[n - 1].result.authorEmail ?? null,
+        capturedAt: answerResults[n - 1].result.capturedAt ?? null,
       }))
 
     return { answer: response, citations }
@@ -706,6 +722,8 @@ Answer:`
         title: c.documentName || null,
         url: c.url || null,
         source_type: c.sourceType || null,
+        author_email: c.authorEmail ?? null,
+        captured_at: c.capturedAt ?? null,
       }))
 
       await setSearchJobResult(jobId, {
@@ -731,6 +749,8 @@ Answer:`
           title: citation.documentName || null,
           url: citation.url || null,
           source_type: citation.sourceType || null,
+          author_email: citation.authorEmail ?? null,
+          captured_at: citation.capturedAt ?? null,
         })),
         status: 'completed',
       })

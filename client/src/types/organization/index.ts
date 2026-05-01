@@ -121,6 +121,7 @@ export interface OrganizationSearchResult {
   sourceType: string
   title?: string
   url?: string
+  metadata?: Record<string, unknown>
 }
 
 export interface OrganizationSearchResponse {
@@ -133,6 +134,8 @@ export interface OrganizationSearchResponse {
     memoryId: string
     url?: string
     sourceType?: string
+    authorEmail?: string
+    capturedAt?: string
   }>
   totalResults: number
   answerJobId?: string // Job ID for async answer generation

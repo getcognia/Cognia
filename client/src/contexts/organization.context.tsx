@@ -47,7 +47,10 @@ interface OrganizationContextType {
   // Documents
   documents: Document[]
   loadDocuments: () => Promise<void>
-  uploadDocument: (file: File) => Promise<Document>
+  uploadDocument: (
+    file: File,
+    metadata?: Record<string, unknown>
+  ) => Promise<Document>
   deleteDocument: (
     documentId: string,
     type?: "document" | "integration"
@@ -241,11 +244,12 @@ export function OrganizationProvider({
   }, [currentOrganization])
 
   const uploadDocument = useCallback(
-    async (file: File) => {
+    async (file: File, metadata?: Record<string, unknown>) => {
       if (!currentOrganization) throw new Error("No organization selected")
       const doc = await organizationService.uploadDocument(
         currentOrganization.slug,
-        file
+        file,
+        metadata
       )
       setDocuments((prev) => [doc, ...prev])
       return doc

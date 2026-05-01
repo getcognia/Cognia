@@ -13,6 +13,16 @@ const Memories = lazy(() =>
     default: module.Memories,
   }))
 )
+const MemoriesV2 = lazy(() =>
+  import("@/pages/memories-v2.page").then((module) => ({
+    default: module.MemoriesV2,
+  }))
+)
+const MemoriesTrash = lazy(() =>
+  import("@/components/memories/TrashView").then((module) => ({
+    default: module.TrashView,
+  }))
+)
 const Docs = lazy(() =>
   import("@/pages/docs.page").then((module) => ({ default: module.Docs }))
 )
@@ -37,14 +47,69 @@ const Integrations = lazy(() =>
     default: module.Integrations,
   }))
 )
-const Briefings = lazy(() =>
-  import("@/pages/briefings.page").then((module) => ({
-    default: module.Briefings,
-  }))
-)
 const MeshShowcase = lazy(() =>
   import("@/pages/mesh-showcase.page").then((module) => ({
     default: module.MeshShowcase,
+  }))
+)
+const OrgAdmin = lazy(() =>
+  import("@/pages/org-admin.page").then((module) => ({
+    default: module.OrgAdmin,
+  }))
+)
+const VerifyEmail = lazy(() =>
+  import("@/pages/verify-email.page").then((module) => ({
+    default: module.VerifyEmail,
+  }))
+)
+const AuthMagic = lazy(() =>
+  import("@/pages/auth-magic.page").then((module) => ({
+    default: module.AuthMagic,
+  }))
+)
+const Pricing = lazy(() =>
+  import("@/pages/pricing.page").then((module) => ({
+    default: module.Pricing,
+  }))
+)
+const Billing = lazy(() =>
+  import("@/pages/billing.page").then((module) => ({
+    default: module.Billing,
+  }))
+)
+const Security = lazy(() =>
+  import("@/pages/security.page").then((module) => ({
+    default: module.Security,
+  }))
+)
+const Trust = lazy(() =>
+  import("@/pages/trust.page").then((module) => ({
+    default: module.Trust,
+  }))
+)
+const Privacy = lazy(() =>
+  import("@/pages/privacy.page").then((module) => ({
+    default: module.Privacy,
+  }))
+)
+const Terms = lazy(() =>
+  import("@/pages/terms.page").then((module) => ({
+    default: module.Terms,
+  }))
+)
+const SubprocessorsPage = lazy(() =>
+  import("@/pages/subprocessors.page").then((module) => ({
+    default: module.Subprocessors,
+  }))
+)
+const DPAPage = lazy(() =>
+  import("@/pages/dpa.page").then((module) => ({
+    default: module.DPA,
+  }))
+)
+const BugBounty = lazy(() =>
+  import("@/pages/bug-bounty.page").then((module) => ({
+    default: module.BugBounty,
   }))
 )
 
@@ -85,22 +150,55 @@ const AppRoutes = () => {
         <AnimatedPage key={location.pathname}>
           <Routes location={location}>
             <Route path="/" element={<AuthRedirectLanding />} />
+            <Route path="/pricing" element={<Pricing />} />
+
+            {/* Public trust & legal pages — always available */}
+            <Route path="/security" element={<Security />} />
+            <Route path="/security/bug-bounty" element={<BugBounty />} />
+            <Route path="/trust" element={<Trust />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/terms" element={<Terms />} />
+            <Route path="/subprocessors" element={<SubprocessorsPage />} />
+            <Route path="/dpa" element={<DPAPage />} />
             {enableInternalRoutes ? (
               <>
                 <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<Login />} />
+                <Route path="/auth/verify-email" element={<VerifyEmail />} />
+                <Route path="/auth/magic" element={<AuthMagic />} />
                 <Route path="/memories" element={<Memories />} />
+                <Route path="/memories/v2" element={<MemoriesV2 />} />
+                <Route path="/memories/trash" element={<MemoriesTrash />} />
                 <Route path="/docs" element={<Docs />} />
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/organization" element={<Organization />} />
                 <Route path="/integrations" element={<Integrations />} />
-                <Route path="/briefings" element={<Briefings />} />
                 <Route path="/mesh-showcase" element={<MeshShowcase />} />
+                <Route path="/org-admin/:slug" element={<OrgAdmin />} />
+                <Route path="/billing" element={<Billing />} />
               </>
             ) : (
               <>
                 <Route path="/login" element={<Navigate to="/" replace />} />
+                <Route path="/signup" element={<Navigate to="/" replace />} />
+                <Route
+                  path="/auth/verify-email"
+                  element={<Navigate to="/" replace />}
+                />
+                <Route
+                  path="/auth/magic"
+                  element={<Navigate to="/" replace />}
+                />
                 <Route path="/memories" element={<Navigate to="/" replace />} />
+                <Route
+                  path="/memories/v2"
+                  element={<Navigate to="/" replace />}
+                />
+                <Route
+                  path="/memories/trash"
+                  element={<Navigate to="/" replace />}
+                />
                 <Route path="/docs" element={<Navigate to="/" replace />} />
                 <Route
                   path="/analytics"
@@ -116,13 +214,14 @@ const AppRoutes = () => {
                   element={<Navigate to="/" replace />}
                 />
                 <Route
-                  path="/briefings"
-                  element={<Navigate to="/" replace />}
-                />
-                <Route
                   path="/mesh-showcase"
                   element={<Navigate to="/" replace />}
                 />
+                <Route
+                  path="/org-admin/:slug"
+                  element={<Navigate to="/" replace />}
+                />
+                <Route path="/billing" element={<Navigate to="/" replace />} />
               </>
             )}
 

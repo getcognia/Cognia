@@ -2,9 +2,19 @@ import { Router, Request, Response } from 'express'
 import { prisma } from '../lib/prisma.lib'
 import { setAuthCookie, clearAuthCookie } from '../utils/auth/auth-cookie.util'
 import { generateToken } from '../utils/auth/jwt.util'
-import { authenticateToken, AuthenticatedRequest } from '../middleware/auth.middleware'
+import {
+  authenticateToken,
+  AuthenticatedRequest,
+  requireAdmin,
+} from '../middleware/auth.middleware'
+import { revokeJti, revokeAllForUser } from '../services/auth/jwt-revocation.service'
+import {
+  issueRefreshToken,
+  rotateRefreshToken,
+  revokeAllForUser as revokeRefreshForUser,
+} from '../services/auth/refresh-token.service'
 import { hashPassword, comparePassword } from '../utils/core/password.util'
-import { validatePassword, PasswordPolicy } from '../utils/auth/password-policy.util'
+import { validatePasswordWithBreachCheck, PasswordPolicy } from '../utils/auth/password-policy.util'
 import {
   generateSecret,
   generateTOTPUri,
@@ -19,10 +29,25 @@ import {
   registerRateLimiter,
   extensionTokenRateLimiter,
 } from '../middleware/rate-limit.middleware'
+import {
+  encrypt2faSecret,
+  decrypt2faSecret,
+  is2faSecretLegacy,
+} from '../services/auth/two-factor.service'
+import { auditLogService } from '../services/core/audit-log.service'
+import {
+  issueEmailVerificationToken,
+  consumeEmailVerificationToken,
+  sendVerificationEmail,
+} from '../services/auth/email-verification.service'
+import { seedSampleWorkspace } from '../services/onboarding/sample-workspace-seeder.service'
+import { getEffectivePermissions } from '../services/auth/permissions.service'
 
 const router = Router()
 
-// Get current user
+// Get current user — extended in Phase 7 to return effective RBAC permissions
+// for both the personal account and every org membership the user has.
+// Frontend reads `personalPermissions` + `orgPermissions[]` to gate UI.
 router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = await prisma.user.findUnique({
@@ -34,6 +59,29 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
       return res.status(404).json({ message: 'User not found' })
     }
 
+    // Effective permission sets:
+    // - personalPermissions: scope = no org. Matches what the user can do
+    //   on /api endpoints that operate without an org context.
+    // - orgPermissions: one entry per active membership. Frontend picks
+    //   the entry matching `currentOrganization` and uses it for gating.
+    const personalPermissions = await getEffectivePermissions(user.id, null)
+
+    const memberships = await prisma.organizationMember.findMany({
+      where: { user_id: user.id, deactivated_at: null },
+      include: {
+        organization: { select: { id: true, name: true, slug: true } },
+      },
+    })
+
+    const orgPermissions = await Promise.all(
+      memberships.map(async m => ({
+        organizationId: m.organization.id,
+        orgSlug: m.organization.slug,
+        role: m.role,
+        permissions: await getEffectivePermissions(user.id, m.organization.id),
+      }))
+    )
+
     res.json({
       success: true,
       data: {
@@ -41,6 +89,8 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
         email: user.email,
         account_type: user.account_type,
         role: user.role,
+        personalPermissions,
+        orgPermissions,
       },
     })
   } catch (error) {
@@ -49,11 +99,93 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
   }
 })
 
-// Logout (clear session cookie)
-router.post('/logout', (_req: Request, res: Response) => {
-  clearAuthCookie(res)
-  res.status(200).json({ message: 'Logged out successfully' })
+// Logout (revoke current JWT's jti and clear session cookie)
+router.post('/logout', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.user?.id) {
+      await auditLogService
+        .logEvent({
+          userId: req.user.id,
+          eventType: 'logout',
+          eventCategory: 'authentication',
+          action: 'logout',
+          metadata: { jti: req.user.jti },
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent') ?? undefined,
+        })
+        .catch(() => {})
+    }
+    const jti = req.user?.jti
+    if (jti) {
+      // Worst-case TTL: full configured JWT lifetime (default 7 days) in milliseconds
+      await revokeJti(jti, 7 * 24 * 60 * 60 * 1000)
+    }
+    clearAuthCookie(res)
+    return res.status(200).json({ message: 'Logged out successfully' })
+  } catch (error) {
+    logger.error('Logout error:', error)
+    return res.status(500).json({ message: 'Failed to logout' })
+  }
 })
+
+// Logout from all sessions for the current user (revoke-since floor + refresh tokens)
+router.post('/logout-all', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ message: 'Unauthorized' })
+    }
+    await Promise.all([revokeAllForUser(req.user.id), revokeRefreshForUser(req.user.id)])
+    await auditLogService
+      .logEvent({
+        userId: req.user.id,
+        eventType: 'session_revoked',
+        eventCategory: 'security',
+        action: 'logout-all',
+        metadata: { scope: 'self' },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      })
+      .catch(() => {})
+    clearAuthCookie(res)
+    res.clearCookie('cognia_refresh', { path: '/api/auth/refresh' })
+    return res.status(200).json({ message: 'All sessions revoked' })
+  } catch (error) {
+    logger.error('Logout-all error:', error)
+    return res.status(500).json({ message: 'Failed to revoke sessions' })
+  }
+})
+
+// Admin-only: revoke all sessions for a given user (JWT floor + refresh tokens)
+router.post(
+  '/sessions/:userId/revoke',
+  authenticateToken,
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { userId } = req.params
+      await Promise.all([revokeAllForUser(userId), revokeRefreshForUser(userId)])
+      await auditLogService
+        .logEvent({
+          userId,
+          eventType: 'session_revoked',
+          eventCategory: 'security',
+          action: 'admin-revoke',
+          metadata: { revokedBy: req.user?.id },
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent') ?? undefined,
+        })
+        .catch(() => {})
+      logger.log('[auth] Admin revoked user sessions', {
+        adminId: req.user!.id,
+        targetUserId: userId,
+      })
+      return res.status(200).json({ message: 'User sessions revoked', userId })
+    } catch (error) {
+      logger.error('Admin session revoke error:', error)
+      return res.status(500).json({ message: 'Failed to revoke user sessions' })
+    }
+  }
+)
 
 // Register with email/password
 router.post('/register', registerRateLimiter, async (req: Request, res: Response) => {
@@ -67,8 +199,8 @@ router.post('/register', registerRateLimiter, async (req: Request, res: Response
       return res.status(400).json({ message: 'account_type must be PERSONAL or ORGANIZATION' })
     }
 
-    // Validate password against standard policy for new registrations
-    const passwordValidation = validatePassword(password, 'standard')
+    // Validate password against standard policy + HIBP breach check for new registrations
+    const passwordValidation = await validatePasswordWithBreachCheck(password, 'standard')
     if (!passwordValidation.valid) {
       return res.status(400).json({
         message: 'Password does not meet requirements',
@@ -90,11 +222,31 @@ router.post('/register', registerRateLimiter, async (req: Request, res: Response
       },
     })
 
+    // Issue and send a verify-email token for the freshly created user
+    const { token: vToken } = await issueEmailVerificationToken(user.id, 'verify_email')
+    await sendVerificationEmail(user.email!, vToken, 'verify_email').catch(() => {})
+
+    // Kick off sample-workspace seeding asynchronously so registration is not blocked
+    seedSampleWorkspace(user.id).catch(err =>
+      logger.warn('[register] seeder failed', { error: String(err) })
+    )
+
     const token = generateToken({
       userId: user.id,
       email: user.email || undefined,
     })
     setAuthCookie(res, token)
+    const { token: refreshToken } = await issueRefreshToken(user.id, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    })
+    res.cookie('cognia_refresh', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/api/auth/refresh',
+      maxAge: 14 * 24 * 60 * 60 * 1000,
+    })
     return res.status(201).json({
       message: 'Registered',
       token,
@@ -133,6 +285,17 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
 
     const ok = await comparePassword(password, user.password_hash)
     if (!ok) {
+      await auditLogService
+        .logEvent({
+          userId: user.id,
+          eventType: 'login_failed',
+          eventCategory: 'authentication',
+          action: 'login',
+          metadata: { reason: 'invalid_password' },
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent') ?? undefined,
+        })
+        .catch(() => {})
       return res.status(401).json({ message: 'Invalid credentials' })
     }
 
@@ -151,15 +314,47 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
 
       // Verify TOTP code
       if (totpCode) {
-        const isValid = verifyTOTP(user.two_factor_secret, totpCode)
+        const decryptedSecret = decrypt2faSecret(user.two_factor_secret)
+        const isValid = verifyTOTP(decryptedSecret, totpCode)
         if (!isValid) {
+          await auditLogService
+            .logEvent({
+              userId: user.id,
+              eventType: 'login_failed',
+              eventCategory: 'authentication',
+              action: 'login',
+              metadata: { reason: 'invalid_2fa' },
+              ipAddress: req.ip,
+              userAgent: req.get('user-agent') ?? undefined,
+            })
+            .catch(() => {})
           return res.status(401).json({ message: 'Invalid 2FA code' })
+        }
+        // Opportunistically re-encrypt legacy plaintext secrets after a
+        // successful TOTP verification so the stored value is upgraded
+        // without requiring an explicit backfill run.
+        if (is2faSecretLegacy(user.two_factor_secret)) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { two_factor_secret: encrypt2faSecret(decryptedSecret) },
+          })
         }
       }
       // Or verify backup code
       else if (backupCode) {
         const codeIndex = verifyBackupCode(backupCode, user.two_factor_backup_codes)
         if (codeIndex === -1) {
+          await auditLogService
+            .logEvent({
+              userId: user.id,
+              eventType: 'login_failed',
+              eventCategory: 'authentication',
+              action: 'login',
+              metadata: { reason: 'invalid_2fa' },
+              ipAddress: req.ip,
+              userAgent: req.get('user-agent') ?? undefined,
+            })
+            .catch(() => {})
           return res.status(401).json({ message: 'Invalid backup code' })
         }
         // Remove used backup code
@@ -181,6 +376,28 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
       email: user.email || undefined,
     })
     setAuthCookie(res, token)
+    const { token: refreshToken } = await issueRefreshToken(user.id, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    })
+    res.cookie('cognia_refresh', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/api/auth/refresh',
+      maxAge: 14 * 24 * 60 * 60 * 1000,
+    })
+    await auditLogService
+      .logEvent({
+        userId: user.id,
+        eventType: 'login_success',
+        eventCategory: 'authentication',
+        action: 'login',
+        metadata: { source: req.body?.source ?? 'web' },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      })
+      .catch(() => {})
     return res.status(200).json({
       success: true,
       data: {
@@ -198,6 +415,33 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Login error:', error)
     return res.status(500).json({ message: 'Failed to login' })
+  }
+})
+
+// Rotate the refresh token cookie and mint a fresh access JWT
+router.post('/refresh', async (req: Request, res: Response) => {
+  const presented = req.cookies?.cognia_refresh
+  if (!presented) {
+    return res.status(401).json({ message: 'No refresh token' })
+  }
+  try {
+    const { token: nextRefresh, userId } = await rotateRefreshToken(presented, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    })
+    const accessToken = generateToken({ userId })
+    setAuthCookie(res, accessToken)
+    res.cookie('cognia_refresh', nextRefresh, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/api/auth/refresh',
+      maxAge: 14 * 24 * 60 * 60 * 1000,
+    })
+    return res.json({ token: accessToken })
+  } catch (err) {
+    res.clearCookie('cognia_refresh', { path: '/api/auth/refresh' })
+    return res.status(401).json({ message: (err as Error).message })
   }
 })
 
@@ -282,10 +526,12 @@ router.post('/2fa/setup', authenticateToken, async (req: AuthenticatedRequest, r
     const secret = generateSecret()
     const uri = generateTOTPUri(secret, user.email || 'user', 'Cognia')
 
-    // Store secret temporarily (not enabled yet)
+    // Store secret temporarily (not enabled yet) — encrypted at rest.
+    // The plaintext `secret` is still returned in the response so the
+    // client can render the QR code / setup string.
     await prisma.user.update({
       where: { id: user.id },
-      data: { two_factor_secret: secret },
+      data: { two_factor_secret: encrypt2faSecret(secret) },
     })
 
     res.status(200).json({
@@ -328,10 +574,20 @@ router.post('/2fa/verify', authenticateToken, async (req: AuthenticatedRequest, 
       return res.status(400).json({ message: 'Please setup 2FA first' })
     }
 
-    // Verify the code
-    const isValid = verifyTOTP(user.two_factor_secret, code)
+    // Verify the code (decrypts dual-read: legacy plaintext or enc:v1:)
+    const decryptedSecret = decrypt2faSecret(user.two_factor_secret)
+    const isValid = verifyTOTP(decryptedSecret, code)
     if (!isValid) {
       return res.status(401).json({ message: 'Invalid verification code' })
+    }
+
+    // Opportunistically upgrade a legacy plaintext secret to encrypted
+    // storage on a successful verify.
+    if (is2faSecretLegacy(user.two_factor_secret)) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { two_factor_secret: encrypt2faSecret(decryptedSecret) },
+      })
     }
 
     // Generate backup codes
@@ -348,6 +604,17 @@ router.post('/2fa/verify', authenticateToken, async (req: AuthenticatedRequest, 
     })
 
     logger.log('[auth] 2FA enabled', { userId: user.id })
+
+    await auditLogService
+      .logEvent({
+        userId: user.id,
+        eventType: '2fa_enabled',
+        eventCategory: 'security',
+        action: '2fa-setup',
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      })
+      .catch(() => {})
 
     res.status(200).json({
       success: true,
@@ -402,10 +669,12 @@ router.post('/2fa/disable', authenticateToken, async (req: AuthenticatedRequest,
 
     // Optionally verify 2FA code if provided
     if (code && user.two_factor_secret) {
-      const isValid = verifyTOTP(user.two_factor_secret, code)
+      const decryptedSecret = decrypt2faSecret(user.two_factor_secret)
+      const isValid = verifyTOTP(decryptedSecret, code)
       if (!isValid) {
         return res.status(401).json({ message: 'Invalid 2FA code' })
       }
+      // No re-encryption upgrade here: the secret is about to be cleared.
     }
 
     // Disable 2FA
@@ -419,6 +688,17 @@ router.post('/2fa/disable', authenticateToken, async (req: AuthenticatedRequest,
     })
 
     logger.log('[auth] 2FA disabled', { userId: user.id })
+
+    await auditLogService
+      .logEvent({
+        userId: user.id,
+        eventType: '2fa_disabled',
+        eventCategory: 'security',
+        action: '2fa-disable',
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      })
+      .catch(() => {})
 
     res.status(200).json({
       success: true,
@@ -499,10 +779,20 @@ router.post(
         return res.status(401).json({ message: 'Invalid password' })
       }
 
-      // Verify 2FA code
-      const isValid = verifyTOTP(user.two_factor_secret, code)
+      // Verify 2FA code (decrypts dual-read: legacy plaintext or enc:v1:)
+      const decryptedSecret = decrypt2faSecret(user.two_factor_secret)
+      const isValid = verifyTOTP(decryptedSecret, code)
       if (!isValid) {
         return res.status(401).json({ message: 'Invalid 2FA code' })
+      }
+
+      // Opportunistically upgrade a legacy plaintext secret to encrypted
+      // storage on a successful verify.
+      if (is2faSecretLegacy(user.two_factor_secret)) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { two_factor_secret: encrypt2faSecret(decryptedSecret) },
+        })
       }
 
       // Generate new backup codes
@@ -515,6 +805,17 @@ router.post(
       })
 
       logger.log('[auth] Backup codes regenerated', { userId: user.id })
+
+      await auditLogService
+        .logEvent({
+          userId: user.id,
+          eventType: 'backup_codes_regenerated',
+          eventCategory: 'security',
+          action: '2fa-backup-codes-regenerate',
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent') ?? undefined,
+        })
+        .catch(() => {})
 
       res.status(200).json({
         success: true,
@@ -581,8 +882,8 @@ router.post(
         }
       }
 
-      // Validate new password
-      const validation = validatePassword(newPassword, policy)
+      // Validate new password against policy + HIBP breach check
+      const validation = await validatePasswordWithBreachCheck(newPassword, policy)
       if (!validation.valid) {
         return res.status(400).json({
           message: 'New password does not meet requirements',
@@ -599,6 +900,18 @@ router.post(
       })
 
       logger.log('[auth] Password changed', { userId: req.user!.id })
+
+      await auditLogService
+        .logEvent({
+          userId: req.user!.id,
+          eventType: 'password_changed',
+          eventCategory: 'security',
+          action: 'password-change',
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent') ?? undefined,
+        })
+        .catch(() => {})
+
       res.status(200).json({ message: 'Password changed successfully' })
     } catch (error) {
       logger.error('Change password error:', error)
@@ -606,5 +919,71 @@ router.post(
     }
   }
 )
+
+// ==========================================
+// Email verification + magic-link endpoints
+// ==========================================
+
+// Public endpoint to verify an email address using a token previously sent to it
+router.post('/verify-email', async (req: Request, res: Response) => {
+  const { token } = req.body ?? {}
+  if (!token) return res.status(400).json({ message: 'token required' })
+  try {
+    const { userId } = await consumeEmailVerificationToken(token, 'verify_email')
+    res.json({ success: true, userId })
+  } catch (err) {
+    res.status(400).json({ success: false, message: (err as Error).message })
+  }
+})
+
+// Re-issue a verification email for the currently authenticated user
+router.post(
+  '/resend-verification',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user?.id || !req.user.email) return res.status(401).json({ message: 'Unauthorized' })
+    const { token } = await issueEmailVerificationToken(req.user.id, 'verify_email')
+    await sendVerificationEmail(req.user.email, token, 'verify_email').catch(() => {})
+    res.json({ success: true })
+  }
+)
+
+// Magic-link flow (passwordless)
+router.post('/magic-link/send', async (req: Request, res: Response) => {
+  const { email } = req.body ?? {}
+  if (!email) return res.status(400).json({ message: 'email required' })
+  const user = await prisma.user.findUnique({ where: { email } })
+  // Always 200 to prevent enumeration
+  if (!user) return res.json({ success: true })
+  const { token } = await issueEmailVerificationToken(user.id, 'magic_link')
+  await sendVerificationEmail(email, token, 'magic_link').catch(() => {})
+  res.json({ success: true })
+})
+
+router.post('/magic-link/consume', async (req: Request, res: Response) => {
+  const { token } = req.body ?? {}
+  if (!token) return res.status(400).json({ message: 'token required' })
+  try {
+    const { userId } = await consumeEmailVerificationToken(token, 'magic_link')
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (!user) return res.status(401).json({ message: 'User not found' })
+    // Issue access + refresh tokens, mirroring /login success path
+    const accessToken = generateToken({ userId: user.id, email: user.email ?? undefined })
+    const { token: refreshToken } = await issueRefreshToken(user.id, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    })
+    res.cookie('cognia_refresh', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/api/auth/refresh',
+      maxAge: 14 * 24 * 60 * 60 * 1000,
+    })
+    res.json({ success: true, token: accessToken })
+  } catch (err) {
+    res.status(400).json({ success: false, message: (err as Error).message })
+  }
+})
 
 export default router

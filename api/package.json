@@ -37,6 +37,9 @@
     "admin:stats": "node -r ts-node/register src/scripts/admin-stats.script.ts",
     "queue:status": "node -r ts-node/register src/scripts/queue-status.script.ts",
     "platform:create-app": "node -r ts-node/register src/scripts/create-platform-app.script.ts",
+    "backfill:2fa": "node -r ts-node/register src/scripts/encrypt-existing-2fa-secrets.script.ts",
+    "backfill:search": "node -r ts-node/register src/scripts/backfill-search-index.script.ts",
+    "seed:polaris": "node -r ts-node/register src/scripts/seed-polaris-handover.script.ts",
     "check": "npm run lint:fix && npm run format && npm run build"
   },
   "keywords": [
@@ -63,6 +66,7 @@
     "@aws-sdk/s3-request-presigner": "^3.980.0",
     "@cogniahq/integrations": "^0.4.2",
     "@google/genai": "^1.24.0",
+    "@node-saml/node-saml": "^5.1.0",
     "@prisma/client": "^6.19.0",
     "@qdrant/js-client-rest": "^1.9.0",
     "@types/bcryptjs": "^2.4.6",
@@ -76,6 +80,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "googleapis": "^131.0.0",
+    "helmet": "^8.1.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.11.0",
@@ -83,7 +88,9 @@
     "multer": "^2.0.2",
     "node-fetch": "^3.3.2",
     "openai": "^6.18.0",
+    "openid-client": "^6.8.4",
     "pdf-parse": "^2.4.5",
+    "razorpay": "^2.9.6",
     "ts-node": "^10.9.1",
     "typescript": "^5.4.5",
     "umap-js": "^1.4.0"

@@ -1,7 +1,8 @@
 import { SourceType } from '@prisma/client'
 
 import { prisma } from '../../lib/prisma.lib'
-import { COLLECTION_NAME, ensureCollection, qdrantClient } from '../../lib/qdrant.lib'
+import { ensureCollection, searchHybrid } from '../../lib/qdrant.lib'
+import { encodeSparse } from '../../lib/sparse-encoder.lib'
 import { aiProvider } from '../ai/ai-provider.service'
 import type {
   PlatformCitation,
@@ -24,35 +25,11 @@ function normalizeMetadata(value: unknown): PlatformDocumentMetadata | null {
   return value as PlatformDocumentMetadata
 }
 
-function normalizeMatterIds(metadata: PlatformDocumentMetadata | null): string[] {
-  if (!metadata) {
-    return []
-  }
-
-  if (Array.isArray(metadata.matterIds)) {
-    return metadata.matterIds.filter((value): value is string => typeof value === 'string')
-  }
-
-  if (typeof metadata.matterId === 'string') {
-    return [metadata.matterId]
-  }
-
-  return []
-}
-
 export class PlatformSearchService {
   async query(
     organizationId: string,
     request: PlatformSearchRequest
   ): Promise<PlatformSearchResult> {
-    if (!request.allowedMatterIds.length) {
-      throw new Error('allowedMatterIds must not be empty')
-    }
-
-    if (request.mode === 'matter' && !request.currentMatterId) {
-      throw new Error('currentMatterId is required for matter mode')
-    }
-
     await ensureCollection()
 
     const embeddingResult = await aiProvider.generateEmbedding(request.query)
@@ -67,17 +44,18 @@ export class PlatformSearchService {
       sourceType => !excludedSourceTypes.has(sourceType)
     )
 
-    const rawResults = await qdrantClient.search(COLLECTION_NAME, {
-      vector: queryEmbedding,
+    const limit = Math.max((request.limit || 10) * 4, 20)
+    const rawResults = await searchHybrid({
+      dense: queryEmbedding,
+      sparse: encodeSparse(request.query),
       filter: {
         must: [
           { key: 'organization_id', match: { value: organizationId } },
           { key: 'source_type', match: { any: includedSourceTypes } },
         ],
       },
-      limit: Math.max((request.limit || 10) * 4, 20),
-      with_payload: true,
-      score_threshold: 0.2,
+      prefetchLimit: limit,
+      limit,
     })
 
     const memoryScores = new Map<string, number>()
@@ -114,7 +92,6 @@ export class PlatformSearchService {
       },
     })
 
-    const allowedMatterIds = new Set(request.allowedMatterIds)
     const filteredResults = memories
       .map(memory => {
         const chunk = memory.document_chunks[0]
@@ -122,7 +99,6 @@ export class PlatformSearchService {
           normalizeMetadata(memory.page_metadata) ||
           normalizeMetadata(chunk?.document?.metadata) ||
           null
-        const matterIds = normalizeMatterIds(metadata)
         const score = memoryScores.get(memory.id) || 0
 
         return {
@@ -136,19 +112,7 @@ export class PlatformSearchService {
           sourceType: memory.source_type || SourceType.DOCUMENT,
           contentPreview: memory.content.slice(0, 320) + (memory.content.length > 320 ? '...' : ''),
           metadata,
-          matterIds,
         }
-      })
-      .filter(result => {
-        if (result.matterIds.length === 0) {
-          return false
-        }
-
-        if (request.mode === 'matter') {
-          return result.matterIds.includes(request.currentMatterId!)
-        }
-
-        return result.matterIds.some(matterId => allowedMatterIds.has(matterId))
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, request.limit || 10)
@@ -164,7 +128,6 @@ export class PlatformSearchService {
 
     return {
       query: request.query,
-      mode: request.mode,
       totalResults: filteredResults.length,
       answer,
       citations: request.includeCitations === false ? undefined : citations,
@@ -204,7 +167,7 @@ export class PlatformSearchService {
       })
       .join('\n\n')
 
-    const prompt = `You are assisting a legal workflow with source-grounded drafting support.
+    const prompt = `You are assisting a team-knowledge workflow.
 
 Context:
 ${context}
@@ -215,8 +178,10 @@ ${query}
 Instructions:
 1. Answer only from the provided context.
 2. Use citations like [1], [2] inline.
-3. If the context is insufficient, say so clearly.
-4. Return plain text only.
+3. Do not invent facts, figures, or sources not present in the context.
+4. If the context is insufficient, say so clearly and list what additional information would be needed.
+5. Structure the response for review: answer, source-backed reasoning, risks or open questions, and next steps where useful.
+6. Return plain text only.
 `
 
     const answer = await aiProvider.generateContent(prompt)

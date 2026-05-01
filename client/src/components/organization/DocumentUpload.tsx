@@ -10,6 +10,7 @@ const ALLOWED_TYPES = [
   "text/markdown",
   "image/png",
   "image/jpeg",
+  "image/gif",
   "image/webp",
 ]
 
@@ -23,6 +24,7 @@ const FILE_TYPE_LABELS: Record<string, string> = {
   "text/markdown": "MD",
   "image/png": "PNG",
   "image/jpeg": "JPG",
+  "image/gif": "GIF",
   "image/webp": "WEBP",
 }
 
@@ -60,6 +62,7 @@ const STAGE_LABELS: Record<ProcessingStage, string> = {
 export function DocumentUpload() {
   const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [tagsInput, setTagsInput] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { uploadDocument, refreshDocumentStatus } = useOrganization()
@@ -103,7 +106,15 @@ export function DocumentUpload() {
           prev.map((f) => (f.file === file ? { ...f, progress: 50 } : f))
         )
 
-        const doc = await uploadDocument(file)
+        const tags = tagsInput
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+
+        const metadata: Record<string, unknown> | undefined =
+          tags.length > 0 ? { tags } : undefined
+
+        const doc = await uploadDocument(file, metadata)
 
         setUploadingFiles((prev) =>
           prev.map((f) =>
@@ -190,7 +201,7 @@ export function DocumentUpload() {
         )
       }
     },
-    [uploadDocument, refreshDocumentStatus]
+    [refreshDocumentStatus, tagsInput, uploadDocument]
   )
 
   const handleFiles = useCallback(
@@ -232,6 +243,36 @@ export function DocumentUpload() {
 
   return (
     <div className="space-y-4">
+      <div className="border border-gray-200 bg-gray-50 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-mono uppercase tracking-wider text-gray-500">
+              [TAGS]
+            </div>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-gray-500">
+              Add comma-separated tags that should attach to every file in this
+              upload batch. Tags become available in search filters.
+            </p>
+          </div>
+          <div className="text-xs font-mono text-gray-400">
+            Applies to all selected files
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <label className="mb-2 block text-xs font-mono uppercase tracking-wide text-gray-600">
+            Tags
+          </label>
+          <input
+            type="text"
+            value={tagsInput}
+            onChange={(e) => setTagsInput(e.target.value)}
+            placeholder="Comma-separated tags"
+            className="w-full border border-gray-300 bg-white px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+          />
+        </div>
+      </div>
+
       {/* Drop zone */}
       <div
         className={`relative border-2 border-dashed p-8 text-center transition-colors cursor-pointer ${
@@ -256,7 +297,7 @@ export function DocumentUpload() {
           {isDragging ? "Drop files here" : "Drop files or click to upload"}
         </div>
         <div className="mt-1 text-xs font-mono text-gray-400">
-          PDF, DOCX, TXT, MD, PNG, JPG, WEBP — max 50MB
+          PDF, DOCX, TXT, MD, PNG, JPG, GIF, WEBP — max 50MB
         </div>
       </div>
 

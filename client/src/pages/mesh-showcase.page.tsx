@@ -1,8 +1,19 @@
 import { mockMeshData } from "@/data/mock"
 
+import { MeshEmptyState } from "@/components/empty-states/MeshEmptyState"
 import { MemoryMesh3DPreview } from "@/components/landing/mesh-preview/MemoryMesh3DPreview"
 
 export function MeshShowcase() {
+  const hasNodes = !!mockMeshData?.nodes && mockMeshData.nodes.length > 0
+
+  if (!hasNodes) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-white">
+        <MeshEmptyState />
+      </main>
+    )
+  }
+
   return (
     <main
       className="min-h-screen overflow-hidden"

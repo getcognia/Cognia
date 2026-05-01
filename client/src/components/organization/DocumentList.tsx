@@ -184,6 +184,11 @@ export function DocumentList() {
           // Get uploader info from metadata if available
           const uploaderName = doc.metadata?.uploader_name as string | undefined
           const uploaderRole = doc.metadata?.uploader_role as string | undefined
+          const tags = Array.isArray(doc.metadata?.tags)
+            ? (doc.metadata?.tags as string[]).filter(
+                (tag) => typeof tag === "string"
+              )
+            : []
 
           return (
             <div
@@ -217,6 +222,18 @@ export function DocumentList() {
                 {doc.page_count && (
                   <div className="text-xs font-mono text-gray-400 mt-0.5">
                     {doc.page_count} page{doc.page_count !== 1 && "s"}
+                  </div>
+                )}
+                {tags.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {tags.map((tag) => (
+                      <span
+                        key={`${doc.id}-${tag}`}
+                        className="border border-gray-200 px-2 py-1 text-[10px] font-mono uppercase tracking-wide text-gray-500"
+                      >
+                        {tag}
+                      </span>
+                    ))}
                   </div>
                 )}
               </div>

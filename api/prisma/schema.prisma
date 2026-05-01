@@ -38,6 +38,7 @@ enum SourceType {
   DOCUMENT
   API
   INTEGRATION
+  DEMO
 }
 
 enum AccountType {
@@ -84,11 +85,15 @@ enum PlatformUploadStatus {
   EXPIRED
 }
 
-enum BriefingType {
-  DAILY_DIGEST
-  WEEKLY_SYNTHESIS
-  TREND_ALERT
-  TEAM_REPORT
+enum SharePermission {
+  READ
+  COMMENT
+}
+
+enum ShareRecipientType {
+  USER
+  ORG
+  LINK
 }
 
 datasource db {
@@ -99,6 +104,7 @@ datasource db {
 model User {
   id                       String               @id @default(uuid()) @db.Uuid
   email                    String?              @unique
+  email_verified_at        DateTime?
   password_hash            String?
   role                     UserRole             @default(USER)
   account_type             AccountType          @default(PERSONAL)
@@ -110,6 +116,15 @@ model User {
   two_factor_secret        String?              // Encrypted TOTP secret
   two_factor_backup_codes  String[]             @default([]) // Hashed backup codes
 
+  // Onboarding fields
+  tour_completed_at        DateTime?
+  demo_dismissed_at        DateTime?
+
+  // Compliance fields
+  deletion_scheduled_at    DateTime?
+  consent                  Json?    // { cookies: bool, analytics: bool, marketing: bool, recordedAt: ... }
+  legal_hold_until         DateTime?
+
   memories                 Memory[]
   memory_snapshots         MemorySnapshot[]
   token_usage              TokenUsage[]
@@ -119,10 +134,17 @@ model User {
   organization_memberships OrganizationMember[]
   uploaded_documents       Document[]
   integrations             UserIntegration[]
-  intelligence_briefings   IntelligenceBriefing[]
-  notification_preferences NotificationPreferences?
   platform_user_links      PlatformUserLink[]
   platform_upload_sessions PlatformUploadSession[] @relation("PlatformUploadSessionUploader")
+  refresh_tokens           RefreshToken[]
+  oauth_identities             OAuthIdentity[]
+  email_verification_tokens    EmailVerificationToken[]
+  memory_shares_authored       MemoryShare[]            @relation("MemorySharer")
+  memory_shares_received       MemoryShare[]            @relation("MemoryShareRecipient")
+  memory_comments              MemoryComment[]
+  memory_tags                  MemoryTag[]
+  saved_searches               SavedSearch[]
+  api_keys                     ApiKey[]
 
   @@map("users")
 }
@@ -162,7 +184,18 @@ model Organization {
   audit_retention  String            @default("90d")
   ip_allowlist     String[]          @default([])
   sso_enabled      Boolean           @default(false)
-  sso_config       Json?
+  sso_provider              String?    // 'saml' | 'oidc'
+  sso_idp_entity_id         String?
+  sso_idp_sso_url           String?
+  sso_idp_cert              String?    @db.Text
+  sso_idp_oidc_issuer       String?
+  sso_idp_oidc_client_id    String?
+  sso_idp_oidc_client_secret String?   // encrypted via crypto.util
+  sso_attribute_email       String?    @default("email")
+  sso_attribute_groups      String?    @default("groups")
+  sso_role_mapping          Json?      // { "okta-admins": "ADMIN", ... }
+  sso_enforced              Boolean    @default(false)
+  sso_email_domains         String[]   @default([])
 
   // Integration sync settings (org-wide defaults)
   default_sync_frequency    SyncFrequency  @default(HOURLY)
@@ -174,15 +207,33 @@ model Organization {
   setup_completed_at     DateTime?
   security_prompt_shown  Boolean     @default(false)
 
+  // BYOK (Bring Your Own Key) for LLM providers — Enterprise plan only
+  llm_provider           String?    // 'openai' | 'anthropic' | 'azure_openai' | 'bedrock'
+  llm_config             Json?      // public config (region, model defaults)
+  llm_key_encrypted      String?    // encrypted via TOKEN_ENCRYPTION_KEY (crypto.util AES-GCM)
+
+  // Compliance fields
+  legal_hold_until       DateTime?
+
   // Relations
   members      OrganizationMember[]
   documents    Document[]
   memories     Memory[]
   invitations  OrganizationInvitation[]
   integrations OrganizationIntegration[]
-  intelligence_briefings IntelligenceBriefing[]
   platform_tenant_links PlatformTenantLink[]
   platform_upload_sessions PlatformUploadSession[] @relation("PlatformUploadSessionOrganization")
+  scim_access_tokens           ScimAccessToken[]
+  memory_shares                MemoryShare[]
+  workspaces                   Workspace[]
+  memory_tags                  MemoryTag[]
+  saved_searches               SavedSearch[]
+
+  // Billing relations
+  subscription                 Subscription?
+  invoices                     Invoice[]
+  usage_records                UsageRecord[]
+  api_keys                     ApiKey[]
 
   @@map("organizations")
 }
@@ -278,13 +329,15 @@ model PlatformUploadSession {
 }
 
 model OrganizationMember {
-  id              String       @id @default(uuid()) @db.Uuid
-  organization_id String       @db.Uuid
-  user_id         String       @db.Uuid
-  role            OrgRole      @default(VIEWER)
-  created_at      DateTime     @default(now())
-  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
-  user            User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                  String       @id @default(uuid()) @db.Uuid
+  organization_id     String       @db.Uuid
+  user_id             String       @db.Uuid
+  role                OrgRole      @default(VIEWER)
+  created_at          DateTime     @default(now())
+  deactivated_at      DateTime?
+  deactivation_reason String?
+  organization        Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  user                User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([organization_id, user_id])
   @@index([organization_id])
@@ -460,17 +513,23 @@ model DocumentChunk {
 }
 
 model AuditLog {
-  id                String   @id @default(uuid()) @db.Uuid
-  user_id           String   @db.Uuid
-  event_type        String
-  event_category    String
-  action            String
-  metadata          Json?
-  ip_address        String?
-  user_agent        String?
-  created_at        DateTime @default(now())
-  user              User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                    String   @id @default(uuid()) @db.Uuid
+  organization_id       String?  @db.Uuid
+  user_id               String?  @db.Uuid
+  actor_email           String?  // preserved across user delete
+  event_type            String
+  event_category        String
+  action                String
+  target_user_id        String?  @db.Uuid
+  target_resource_type  String?
+  target_resource_id    String?
+  metadata              Json?
+  ip_address            String?
+  user_agent            String?
+  created_at            DateTime @default(now())
+  user                  User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
 
+  @@index([organization_id, created_at(sort: Desc)])
   @@index([user_id])
   @@index([event_type])
   @@index([event_category])
@@ -498,12 +557,18 @@ model Memory {
   last_accessed          DateTime             @default(now())
   source_type            SourceType?          @default(EXTENSION)
   organization_id        String?              @db.Uuid
+  workspace_id           String?              @db.Uuid
+  deleted_at             DateTime?
   user                   User                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
   organization           Organization?        @relation(fields: [organization_id], references: [id], onDelete: SetNull)
+  workspace              Workspace?           @relation(fields: [workspace_id], references: [id], onDelete: SetNull)
   related_memories       MemoryRelation[]     @relation("MemoryRelations")
   related_to_memories    MemoryRelation[]     @relation("RelatedMemories")
   query_related_memories QueryRelatedMemory[]
   document_chunks        DocumentChunk[]
+  shares                 MemoryShare[]
+  comments               MemoryComment[]
+  tags                   MemoryTagOnMemory[]
 
   @@index([user_id])
   @@index([created_at])
@@ -516,6 +581,7 @@ model Memory {
   @@index([last_accessed])
   @@index([organization_id])
   @@index([source_type])
+  @@index([user_id, deleted_at])
   @@unique([user_id, canonical_hash])
   @@map("memories")
 }
@@ -549,6 +615,23 @@ model MemorySnapshot {
   @@index([user_id])
   @@index([user_id, created_at])
   @@map("memory_snapshots")
+}
+
+/// Cached output of the nightly mesh recompute. Reading this row should
+/// give the front-end a complete graph in one query without recomputing
+/// UMAP / clustering on the request path.
+model MeshSnapshot {
+  id              String   @id @default(uuid()) @db.Uuid
+  scope_type      String   // 'user' | 'organization'
+  scope_id        String   @db.Uuid
+  node_count      Int
+  edge_count      Int
+  payload         Json     // { nodes: [...], edges: [...], clusters: [...] }
+  computed_at     DateTime @default(now())
+
+  @@unique([scope_type, scope_id])
+  @@index([scope_type, scope_id, computed_at])
+  @@map("mesh_snapshots")
 }
 
 /// Each search query event (stores only hashed embedding reference)
@@ -641,45 +724,290 @@ model BrowsingSummary {
   @@map("browsing_summaries")
 }
 
-model IntelligenceBriefing {
-  id              String       @id @default(uuid()) @db.Uuid
-  user_id         String       @db.Uuid
-  organization_id String?      @db.Uuid
-  briefing_type   BriefingType
-  period_start    DateTime
-  period_end      DateTime
-  summary         String       @db.Text
-  topics          Json
-  wow_facts       Json?
-  knowledge_gaps  Json?
-  connections     Json?
-  expert_updates  Json?
-  read_at         DateTime?
-  created_at      DateTime     @default(now())
-  updated_at      DateTime     @default(now()) @updatedAt
+model RefreshToken {
+  id            String    @id @default(uuid()) @db.Uuid
+  user_id       String    @db.Uuid
+  family_id     String    @db.Uuid
+  token_hash    String    @unique
+  parent_id     String?   @db.Uuid
+  expires_at    DateTime
+  created_at    DateTime  @default(now())
+  used_at       DateTime?
+  revoked_at    DateTime?
+  ip_address    String?
+  user_agent    String?
+  user          User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  user         User          @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  organization Organization? @relation(fields: [organization_id], references: [id], onDelete: Cascade)
-
-  @@index([user_id, briefing_type, period_start])
-  @@index([organization_id, briefing_type, period_start])
-  @@index([user_id, created_at])
-  @@map("intelligence_briefings")
+  @@index([user_id])
+  @@index([family_id])
+  @@map("refresh_tokens")
 }
 
-model NotificationPreferences {
-  id               String  @id @default(uuid()) @db.Uuid
-  user_id          String  @unique @db.Uuid
-  daily_digest     Boolean @default(true)
-  weekly_synthesis Boolean @default(true)
-  trend_alerts     Boolean @default(true)
-  team_reports     Boolean @default(true)
-  digest_hour      Int     @default(18)
-  timezone         String  @default("UTC")
-  created_at       DateTime @default(now())
-  updated_at       DateTime @default(now()) @updatedAt
+model OAuthIdentity {
+  id          String   @id @default(uuid()) @db.Uuid
+  user_id     String   @db.Uuid
+  provider    String   // 'google' | 'microsoft'
+  subject     String   // provider's stable user id
+  email       String?
+  created_at  DateTime @default(now())
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  @@unique([provider, subject])
+  @@index([user_id])
+  @@map("oauth_identities")
+}
 
-  @@map("notification_preferences")
+model EmailVerificationToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  user_id     String    @db.Uuid
+  token_hash  String    @unique
+  purpose     String    // 'verify_email' | 'magic_link' | 'password_reset'
+  expires_at  DateTime
+  used_at     DateTime?
+  created_at  DateTime  @default(now())
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([purpose])
+  @@map("email_verification_tokens")
+}
+
+model ScimAccessToken {
+  id                  String    @id @default(uuid()) @db.Uuid
+  organization_id     String    @db.Uuid
+  token_hash          String    @unique
+  prefix              String    // first 8 chars (visible)
+  name                String?
+  created_by_user_id  String?   @db.Uuid
+  created_at          DateTime  @default(now())
+  last_used_at        DateTime?
+  revoked_at          DateTime?
+  organization        Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("scim_access_tokens")
+}
+
+model MemoryShare {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  memory_id           String                 @db.Uuid
+  sharer_user_id      String                 @db.Uuid
+  recipient_type      ShareRecipientType
+  recipient_user_id   String?                @db.Uuid
+  recipient_org_id    String?                @db.Uuid
+  link_token          String?                @unique
+  permission          SharePermission        @default(READ)
+  expires_at          DateTime?
+  created_at          DateTime               @default(now())
+  revoked_at          DateTime?
+  memory              Memory                 @relation(fields: [memory_id], references: [id], onDelete: Cascade)
+  sharer_user         User                   @relation("MemorySharer", fields: [sharer_user_id], references: [id], onDelete: Cascade)
+  recipient_user      User?                  @relation("MemoryShareRecipient", fields: [recipient_user_id], references: [id], onDelete: SetNull)
+  recipient_org       Organization?          @relation(fields: [recipient_org_id], references: [id], onDelete: SetNull)
+
+  @@index([memory_id])
+  @@index([recipient_user_id])
+  @@index([recipient_org_id])
+  @@map("memory_shares")
+}
+
+model MemoryComment {
+  id              String          @id @default(uuid()) @db.Uuid
+  memory_id       String          @db.Uuid
+  author_user_id  String          @db.Uuid
+  parent_id       String?         @db.Uuid
+  body_md         String          @db.Text
+  created_at      DateTime        @default(now())
+  updated_at      DateTime        @updatedAt
+  deleted_at      DateTime?
+  memory          Memory          @relation(fields: [memory_id], references: [id], onDelete: Cascade)
+  author          User            @relation(fields: [author_user_id], references: [id], onDelete: Cascade)
+  parent          MemoryComment?  @relation("ChildComments", fields: [parent_id], references: [id], onDelete: SetNull)
+  children        MemoryComment[] @relation("ChildComments")
+
+  @@index([memory_id])
+  @@index([parent_id])
+  @@map("memory_comments")
+}
+
+model Workspace {
+  id              String  @id @default(uuid()) @db.Uuid
+  organization_id String  @db.Uuid
+  name            String
+  slug            String
+  description     String?
+  created_by_user_id String? @db.Uuid
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  memories        Memory[]
+
+  @@unique([organization_id, slug])
+  @@index([organization_id])
+  @@map("workspaces")
+}
+
+model MemoryTag {
+  id              String  @id @default(uuid()) @db.Uuid
+  organization_id String? @db.Uuid
+  user_id         String? @db.Uuid
+  name            String
+  color           String?
+  created_at      DateTime @default(now())
+  organization    Organization? @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  user            User?         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  memories        MemoryTagOnMemory[]
+
+  @@unique([organization_id, name])
+  @@unique([user_id, name])
+  @@index([organization_id])
+  @@index([user_id])
+  @@map("memory_tags")
+}
+
+model MemoryTagOnMemory {
+  memory_id  String @db.Uuid
+  tag_id     String @db.Uuid
+  created_at DateTime @default(now())
+  memory     Memory    @relation(fields: [memory_id], references: [id], onDelete: Cascade)
+  tag        MemoryTag @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+
+  @@id([memory_id, tag_id])
+  @@index([memory_id])
+  @@index([tag_id])
+  @@map("memory_tags_on_memories")
+}
+
+model SavedSearch {
+  id              String   @id @default(uuid()) @db.Uuid
+  user_id         String   @db.Uuid
+  organization_id String?  @db.Uuid
+  name            String
+  query           String
+  filters         Json?
+  alert_enabled   Boolean  @default(false)
+  alert_frequency String   @default("daily")
+  last_alerted_at DateTime?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  user            User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization    Organization? @relation(fields: [organization_id], references: [id], onDelete: SetNull)
+
+  @@index([user_id])
+  @@index([organization_id])
+  @@index([alert_enabled, alert_frequency])
+  @@map("saved_searches")
+}
+
+model Subscription {
+  id                       String   @id @default(uuid()) @db.Uuid
+  organization_id          String   @unique @db.Uuid
+  razorpay_customer_id     String?  @unique
+  razorpay_subscription_id String?  @unique
+  razorpay_plan_id         String?
+  status                   String   @default("created") // created|authenticated|active|paused|halted|cancelled|completed|expired
+  plan_id                  String   @default("free")
+  current_period_start     DateTime?
+  current_period_end       DateTime?
+  cancel_at_period_end     Boolean  @default(false)
+  trial_ends_at            DateTime?
+  seats_purchased          Int      @default(1)
+  short_url                String?  // Razorpay-hosted hosted_url for the subscription
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
+  organization             Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id                  String    @id @default(uuid()) @db.Uuid
+  organization_id     String    @db.Uuid
+  razorpay_invoice_id String    @unique
+  razorpay_payment_id String?
+  amount_due_paise    Int       // Razorpay uses paise (smallest unit) for INR; we'll use it for any currency
+  amount_paid_paise   Int       @default(0)
+  currency            String    @default("INR")
+  status              String    // issued|paid|cancelled|expired|partially_paid
+  hosted_url          String?
+  pdf_url             String?
+  period_start        DateTime?
+  period_end          DateTime?
+  paid_at             DateTime?
+  created_at          DateTime  @default(now())
+  organization        Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@map("invoices")
+}
+
+model UsageRecord {
+  id                       String    @id @default(uuid()) @db.Uuid
+  organization_id          String    @db.Uuid
+  period_start             DateTime
+  period_end               DateTime
+  tokens_used              Int       @default(0)
+  memories_created         Int       @default(0)
+  integrations_active      Int       @default(0)
+  reported_to_razorpay_at  DateTime?
+  created_at               DateTime  @default(now())
+  organization             Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@unique([organization_id, period_start])
+  @@map("usage_records")
+}
+
+model BillingEvent {
+  id                String   @id @default(uuid()) @db.Uuid
+  organization_id   String?  @db.Uuid
+  type              String
+  razorpay_event_id String   @unique
+  payload           Json
+  processed_at      DateTime?
+  error             String?
+  created_at        DateTime @default(now())
+
+  @@index([organization_id])
+  @@map("billing_events")
+}
+
+model ApiKey {
+  id                  String    @id @default(uuid()) @db.Uuid
+  organization_id     String?   @db.Uuid
+  user_id             String    @db.Uuid
+  name                String
+  prefix              String    // first 8 chars (visible)
+  key_hash            String    @unique
+  scopes              String[]  // ['memories.read','memories.write','search','briefings.read']
+  last_used_at        DateTime?
+  created_at          DateTime  @default(now())
+  revoked_at          DateTime?
+  user                User           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization        Organization?  @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([user_id])
+  @@map("api_keys")
+}
+
+model WebhookDelivery {
+  id                  String    @id @default(uuid()) @db.Uuid
+  organization_id     String?   @db.Uuid
+  user_id             String?   @db.Uuid
+  integration_id      String?   @db.Uuid
+  provider            String
+  event_id            String    // provider's event id (for dedup)
+  payload             Json
+  status              String    @default("pending") // pending|processed|failed|dead
+  attempts            Int       @default(0)
+  last_error          String?
+  next_retry_at       DateTime?
+  processed_at        DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  @@unique([provider, event_id])
+  @@index([status, next_retry_at])
+  @@index([organization_id])
+  @@map("webhook_deliveries")
 }

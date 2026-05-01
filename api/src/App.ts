@@ -14,11 +14,17 @@ import http from 'http'
 import globalErrorHandler from './controller/utils/global-error.controller'
 
 import { routes } from './routes/index.route'
+import razorpayWebhookRouter from './routes/razorpay-webhook.route'
 import { prisma } from './lib/prisma.lib'
 import { startContentWorker } from './workers/content-worker'
 import { startCyclicProfileWorker } from './workers/profile-worker'
 import { startDocumentWorker } from './workers/document-worker'
-import { startBriefingWorker } from './workers/briefing-worker'
+import { startMeshRecomputeWorker } from './workers/mesh-recompute.worker'
+import { startAuditRetentionWorker } from './workers/audit-retention.worker'
+import { startTrashPurgeWorker } from './workers/trash-purge.worker'
+import { startWebhookWorker } from './workers/webhook-worker'
+import { startAccountDeletionWorker } from './services/compliance/account-deletion.service'
+import { startOAuthRefreshScheduler } from './services/integration/oauth-refresh.service'
 import { ensureCollection } from './lib/qdrant.lib'
 import { aiProvider } from './services/ai/ai-provider.service'
 import { isOpenAISearchOnlyModeEnabled } from './services/ai/ai-config'
@@ -26,6 +32,7 @@ import { logger } from './utils/core/logger.util'
 import { getAllowedOrigins, getMorganOutputMode } from './utils/core/env.util'
 import { validateRequestSize } from './utils/validation/validation.util'
 import { integrationService } from './services/integration'
+import { applySecurityHeaders } from './middleware/security-headers.middleware'
 
 const app = express()
 app.set('trust proxy', 1)
@@ -193,6 +200,11 @@ if (morganOutputMode === 'log' || morganOutputMode === 'both') {
   app.use(morgan(plainMorganFormat, { stream: morganFileStream }))
 }
 
+// Razorpay webhook MUST be mounted before express.json() so the raw body is
+// preserved for HMAC-SHA256 signature verification. The router uses
+// express.raw() internally.
+app.use('/api/razorpay/webhook', razorpayWebhookRouter)
+
 const captureRawBody = (req: Request, _res: Response, buf: Buffer) => {
   const requestWithRawBody = req as Request & { rawBody?: string }
   requestWithRawBody.rawBody = buf.toString('utf8')
@@ -240,6 +252,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next()
 })
 
+applySecurityHeaders(app)
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -298,20 +311,24 @@ server.listen(port, async () => {
   }
   startDocumentWorker()
   logger.log('[startup] document_worker_started')
-  if (openAISearchOnlyMode) {
-    logger.log('[startup] briefing_worker_skipped', {
-      reason: 'OPENAI_SEARCH_ONLY_MODE',
-    })
-  } else {
-    startBriefingWorker()
-    logger.log('[startup] briefing_worker_started')
-  }
+  startMeshRecomputeWorker()
+  logger.log('[startup] mesh_recompute_worker_started')
   try {
     await integrationService.initialize()
     logger.log('[startup] integration_service_ready')
   } catch (e) {
     logger.warn('[startup] integration_service_error', String((e as Error)?.message || e))
   }
+  startAuditRetentionWorker()
+  logger.log('[startup] audit_retention_worker_started')
+  startTrashPurgeWorker()
+  logger.log('[startup] trash_purge_worker_started')
+  startAccountDeletionWorker()
+  logger.log('[startup] account_deletion_worker_started')
+  startWebhookWorker()
+  logger.log('[startup] webhook_worker_started')
+  startOAuthRefreshScheduler()
+  logger.log('[startup] oauth_refresh_scheduler_started')
   logger.log('[startup] server_listening', { protocol, port })
 })
 process.on('unhandledRejection', (err: Error) => {

@@ -1,9 +1,13 @@
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { useAuth } from "@/contexts/auth.context"
+import type { SsoDiscoveryResult } from "@/services/identity.service"
 import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { cn } from "@/lib/utils.lib"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { MagicLinkForm } from "@/components/auth/MagicLinkForm"
+import { OAuthButton } from "@/components/auth/OAuthButton"
+import { SsoDiscovery } from "@/components/auth/SsoDiscovery"
 import { ConsoleButton } from "@/components/landing/ConsoleButton"
 
 type AccountType = "PERSONAL" | "ORGANIZATION"
@@ -108,22 +112,65 @@ export const Login = () => {
     accountType,
   } = useAuth()
 
+  // Default to register mode if user landed via /signup (or /signup?plan=...)
+  const startAsRegister =
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/signup")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
-  const [isRegister, setIsRegister] = useState(false)
+  const [isRegister, setIsRegister] = useState(startAsRegister)
   const [showPassword, setShowPassword] = useState(false)
-  const [selectedAccountType, setSelectedAccountType] =
-    useState<AccountType>("PERSONAL")
-  const [showAccountTypeSelection, setShowAccountTypeSelection] =
-    useState(false)
+  // The signup flow always provisions a personal workspace. Team workspaces are
+  // created post-signup via the CreateOrganizationDialog.
+  const selectedAccountType: AccountType = "PERSONAL"
   const [sessionExpiredMessage, setSessionExpiredMessage] = useState("")
 
   // 2FA state
   const [requires2FA, setRequires2FA] = useState(false)
   const [totpCode, setTotpCode] = useState("")
   const [useBackupCode, setUseBackupCode] = useState(false)
+
+  // Phase 2: SSO discovery + magic link
+  const [ssoDiscovery, setSsoDiscovery] = useState<SsoDiscoveryResult | null>(
+    null
+  )
+  const [showMagicLink, setShowMagicLink] = useState(false)
+
+  // Capture token from OAuth callback redirect (?token=...)
+  useEffect(() => {
+    const tokenFromOauth = searchParams.get("token")
+    if (!tokenFromOauth) return
+    try {
+      localStorage.setItem("auth_token", tokenFromOauth)
+    } catch {
+      // ignore
+    }
+    // Clear token from URL for hygiene
+    const cleanUrl = window.location.pathname
+    window.history.replaceState({}, "", cleanUrl)
+    // Refresh auth context (will trigger redirect via isAuthenticated branch)
+    void (async () => {
+      try {
+        // Lazy access to checkAuth via context
+        // (Login already imports useAuth above; calling here would require
+        // checkAuth — we surface it through window.location reload instead.)
+        window.location.reload()
+      } catch {
+        // ignore
+      }
+    })()
+  }, [searchParams])
+
+  const handleSsoResult = useCallback((result: SsoDiscoveryResult | null) => {
+    setSsoDiscovery(result)
+  }, [])
+
+  const handleSsoLogin = () => {
+    if (!ssoDiscovery?.loginUrl) return
+    window.location.href = ssoDiscovery.loginUrl
+  }
 
   // Check for session expired parameter
   useEffect(() => {
@@ -365,184 +412,80 @@ export const Login = () => {
             <div className="space-y-6">
               <div>
                 <h2 className="text-3xl font-light font-editorial text-gray-900 mb-2">
-                  {isRegister && showAccountTypeSelection
-                    ? "Choose your account type"
-                    : isRegister
-                      ? "Create your account"
-                      : "Sign in to your account"}
+                  {isRegister
+                    ? "Create your account"
+                    : "Sign in to your account"}
                 </h2>
                 <p className="text-sm text-gray-600">
-                  {isRegister && showAccountTypeSelection
-                    ? "This cannot be changed later"
-                    : isRegister
-                      ? "Get started with Cognia today"
-                      : "Enter your credentials to continue"}
+                  {isRegister
+                    ? "Start free with a personal workspace. You can invite a team later."
+                    : "Enter your credentials to continue"}
                 </p>
               </div>
 
-              {/* Account Type Selection (Registration Step 1) */}
-              {isRegister && showAccountTypeSelection ? (
-                <div className="space-y-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedAccountType("PERSONAL")
-                      setShowAccountTypeSelection(false)
-                    }}
-                    className={cn(
-                      "w-full p-4 border text-left transition-all duration-200",
-                      "border-gray-200 hover:border-gray-900 hover:bg-gray-50"
-                    )}
+              <form className="space-y-5" onSubmit={handleSubmit}>
+                <div>
+                  <label
+                    htmlFor="email"
+                    className="block text-sm font-medium text-gray-700 mb-2"
                   >
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 flex items-center justify-center bg-gray-100 border border-gray-200">
-                        <svg
-                          className="w-5 h-5 text-gray-700"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                          />
-                        </svg>
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-sm font-semibold text-gray-900 mb-1">
-                          Personal Account
-                        </div>
-                        <div className="text-xs text-gray-600">
-                          Save and search your browsing history with the browser
-                          extension. Your personal knowledge base.
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedAccountType("ORGANIZATION")
-                      setShowAccountTypeSelection(false)
-                    }}
+                    Email address
+                  </label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    required
                     className={cn(
-                      "w-full p-4 border text-left transition-all duration-200",
-                      "border-gray-200 hover:border-gray-900 hover:bg-gray-50"
+                      "block w-full px-4 py-3 border rounded-none transition-all duration-200",
+                      "focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent",
+                      "placeholder:text-gray-400 text-gray-900 text-sm",
+                      error
+                        ? "border-red-300 focus:ring-red-500"
+                        : "border-gray-300"
                     )}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 flex items-center justify-center bg-gray-100 border border-gray-200">
-                        <svg
-                          className="w-5 h-5 text-gray-700"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
-                          />
-                        </svg>
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-sm font-semibold text-gray-900 mb-1">
-                          Team Workspace
-                        </div>
-                        <div className="text-xs text-gray-600">
-                          Upload documents and search them with AI. Collaborate
-                          with your team.
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                </div>
-              ) : (
-                <form className="space-y-5" onSubmit={handleSubmit}>
-                  {/* Account type indicator for registration */}
-                  {isRegister && (
-                    <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-200">
-                      <div className="flex items-center gap-2">
-                        {selectedAccountType === "PERSONAL" ? (
-                          <svg
-                            className="w-4 h-4 text-gray-600"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                            />
-                          </svg>
-                        ) : (
-                          <svg
-                            className="w-4 h-4 text-gray-600"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
-                            />
-                          </svg>
-                        )}
-                        <span className="text-xs font-mono text-gray-600">
-                          {selectedAccountType === "PERSONAL"
-                            ? "Personal Account"
-                            : "Team Workspace"}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowAccountTypeSelection(true)}
-                        className="text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors"
-                      >
-                        Change
-                      </button>
-                    </div>
+                    placeholder="name@company.com"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value)
+                      setError("")
+                    }}
+                    disabled={isLoading}
+                  />
+                  {!isRegister && (
+                    <SsoDiscovery email={email} onResult={handleSsoResult} />
                   )}
+                </div>
 
-                  <div>
-                    <label
-                      htmlFor="email"
-                      className="block text-sm font-medium text-gray-700 mb-2"
+                {/* SSO discovery hint + enforced redirect */}
+                {!isRegister && ssoDiscovery?.ssoAvailable && (
+                  <div className="border border-blue-200 bg-blue-50 px-4 py-3 space-y-2">
+                    <div className="text-xs text-blue-900">
+                      {ssoDiscovery.enforced
+                        ? `${ssoDiscovery.orgName ?? "Your organization"} requires SSO sign-in.`
+                        : `${ssoDiscovery.orgName ?? "Your organization"} supports SSO sign-in.`}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSsoLogin}
+                      disabled={!ssoDiscovery.loginUrl}
+                      className="w-full text-xs font-medium px-3 py-2 bg-gray-900 text-white hover:bg-black disabled:opacity-40"
                     >
-                      Email address
-                    </label>
-                    <input
-                      id="email"
-                      name="email"
-                      type="email"
-                      autoComplete="email"
-                      required
-                      className={cn(
-                        "block w-full px-4 py-3 border rounded-none transition-all duration-200",
-                        "focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent",
-                        "placeholder:text-gray-400 text-gray-900 text-sm",
-                        error
-                          ? "border-red-300 focus:ring-red-500"
-                          : "border-gray-300"
-                      )}
-                      placeholder="name@company.com"
-                      value={email}
-                      onChange={(e) => {
-                        setEmail(e.target.value)
-                        setError("")
-                      }}
-                      disabled={isLoading}
-                    />
+                      Continue with{" "}
+                      {ssoDiscovery.orgName
+                        ? `${ssoDiscovery.orgName} SSO`
+                        : "SSO"}
+                    </button>
                   </div>
+                )}
 
+                {/* Hide password block when SSO is enforced for this email */}
+                {!(
+                  !isRegister &&
+                  ssoDiscovery?.ssoAvailable &&
+                  ssoDiscovery?.enforced
+                ) && (
                   <div>
                     <label
                       htmlFor="password"
@@ -679,151 +622,155 @@ export const Login = () => {
                       </p>
                     )}
                   </div>
+                )}
 
-                  {/* 2FA Code Input */}
-                  {requires2FA && !isRegister && (
-                    <div className="space-y-3">
-                      <div className="bg-blue-50 border border-blue-200 p-4 rounded-none">
-                        <div className="flex">
-                          <svg
-                            className="w-5 h-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                            />
-                          </svg>
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-blue-800">
-                              Two-factor authentication required
-                            </p>
-                            <p className="text-xs text-blue-600 mt-1">
-                              Enter the code from your authenticator app
-                            </p>
-                          </div>
+                {/* 2FA Code Input */}
+                {requires2FA && !isRegister && (
+                  <div className="space-y-3">
+                    <div className="bg-blue-50 border border-blue-200 p-4 rounded-none">
+                      <div className="flex">
+                        <svg
+                          className="w-5 h-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                          />
+                        </svg>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-blue-800">
+                            Two-factor authentication required
+                          </p>
+                          <p className="text-xs text-blue-600 mt-1">
+                            Enter the code from your authenticator app
+                          </p>
                         </div>
                       </div>
+                    </div>
 
-                      <div>
-                        <label
-                          htmlFor="totpCode"
-                          className="block text-sm font-medium text-gray-700 mb-2"
-                        >
-                          {useBackupCode
-                            ? "Backup code"
-                            : "Authentication code"}
-                        </label>
-                        <input
-                          id="totpCode"
-                          name="totpCode"
-                          type="text"
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          required
-                          className={cn(
-                            "block w-full px-4 py-3 border rounded-none transition-all duration-200",
-                            "focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent",
-                            "placeholder:text-gray-400 text-gray-900 text-sm font-mono tracking-widest text-center",
-                            error
-                              ? "border-red-300 focus:ring-red-500"
-                              : "border-gray-300"
-                          )}
-                          placeholder={useBackupCode ? "XXXX-XXXX" : "000000"}
-                          value={totpCode}
-                          onChange={(e) => {
-                            setTotpCode(e.target.value)
-                            setError("")
-                          }}
-                          disabled={isLoading}
-                          maxLength={useBackupCode ? 9 : 6}
+                    <div>
+                      <label
+                        htmlFor="totpCode"
+                        className="block text-sm font-medium text-gray-700 mb-2"
+                      >
+                        {useBackupCode ? "Backup code" : "Authentication code"}
+                      </label>
+                      <input
+                        id="totpCode"
+                        name="totpCode"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        required
+                        className={cn(
+                          "block w-full px-4 py-3 border rounded-none transition-all duration-200",
+                          "focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent",
+                          "placeholder:text-gray-400 text-gray-900 text-sm font-mono tracking-widest text-center",
+                          error
+                            ? "border-red-300 focus:ring-red-500"
+                            : "border-gray-300"
+                        )}
+                        placeholder={useBackupCode ? "XXXX-XXXX" : "000000"}
+                        value={totpCode}
+                        onChange={(e) => {
+                          setTotpCode(e.target.value)
+                          setError("")
+                        }}
+                        disabled={isLoading}
+                        maxLength={useBackupCode ? 9 : 6}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseBackupCode(!useBackupCode)
+                          setTotpCode("")
+                          setError("")
+                        }}
+                        className="text-xs text-gray-500 hover:text-gray-900 transition-colors"
+                      >
+                        {useBackupCode
+                          ? "Use authenticator app"
+                          : "Use backup code instead"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRequires2FA(false)
+                          setTotpCode("")
+                          setUseBackupCode(false)
+                          setError("")
+                        }}
+                        className="text-xs text-gray-500 hover:text-gray-900 transition-colors"
+                      >
+                        ← Back to login
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {sessionExpiredMessage && !error && (
+                  <div className="bg-orange-50 border border-orange-200 p-4 rounded-none">
+                    <div className="flex">
+                      <svg
+                        className="w-5 h-5 text-orange-600 mt-0.5 mr-3 flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
                         />
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setUseBackupCode(!useBackupCode)
-                            setTotpCode("")
-                            setError("")
-                          }}
-                          className="text-xs text-gray-500 hover:text-gray-900 transition-colors"
-                        >
-                          {useBackupCode
-                            ? "Use authenticator app"
-                            : "Use backup code instead"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRequires2FA(false)
-                            setTotpCode("")
-                            setUseBackupCode(false)
-                            setError("")
-                          }}
-                          className="text-xs text-gray-500 hover:text-gray-900 transition-colors"
-                        >
-                          ← Back to login
-                        </button>
+                      </svg>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-orange-800">
+                          {sessionExpiredMessage}
+                        </p>
                       </div>
                     </div>
-                  )}
+                  </div>
+                )}
 
-                  {sessionExpiredMessage && !error && (
-                    <div className="bg-orange-50 border border-orange-200 p-4 rounded-none">
-                      <div className="flex">
-                        <svg
-                          className="w-5 h-5 text-orange-600 mt-0.5 mr-3 flex-shrink-0"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-orange-800">
-                            {sessionExpiredMessage}
-                          </p>
-                        </div>
+                {error && (
+                  <div className="bg-red-50 border border-red-200 p-4 rounded-none">
+                    <div className="flex">
+                      <svg
+                        className="w-5 h-5 text-red-600 mt-0.5 mr-3 flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-red-800">
+                          {error}
+                        </p>
                       </div>
                     </div>
-                  )}
+                  </div>
+                )}
 
-                  {error && (
-                    <div className="bg-red-50 border border-red-200 p-4 rounded-none">
-                      <div className="flex">
-                        <svg
-                          className="w-5 h-5 text-red-600 mt-0.5 mr-3 flex-shrink-0"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-red-800">
-                            {error}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
+                {!(
+                  !isRegister &&
+                  ssoDiscovery?.ssoAvailable &&
+                  ssoDiscovery?.enforced
+                ) && (
                   <div className="space-y-3">
                     <button
                       type="submit"
@@ -843,8 +790,35 @@ export const Login = () => {
                       <div className="absolute inset-0 bg-black transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
                     </button>
                   </div>
-                </form>
-              )}
+                )}
+              </form>
+
+              {/* OAuth + magic link block */}
+              <div className="space-y-3 pt-4 border-t border-gray-200">
+                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 text-center">
+                  or continue with
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <OAuthButton provider="google" />
+                  <OAuthButton provider="microsoft" />
+                </div>
+                {!isRegister && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowMagicLink((v) => !v)}
+                      className="w-full text-xs font-medium text-gray-600 hover:text-gray-900 underline transition-colors"
+                    >
+                      {showMagicLink
+                        ? "Use password instead"
+                        : "Email me a sign-in link"}
+                    </button>
+                    {showMagicLink && (
+                      <MagicLinkForm defaultEmail={email} className="pt-2" />
+                    )}
+                  </>
+                )}
+              </div>
 
               <div className="relative pt-4">
                 <div className="absolute inset-0 flex items-center">
@@ -863,13 +837,10 @@ export const Login = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const newIsRegister = !isRegister
-                    setIsRegister(newIsRegister)
+                    setIsRegister((prev) => !prev)
                     setError("")
                     setEmail("")
                     setPassword("")
-                    // Show account type selection when switching to register
-                    setShowAccountTypeSelection(newIsRegister)
                   }}
                   disabled={isLoading}
                   className="text-sm font-medium text-black hover:text-gray-700 transition-colors duration-200"

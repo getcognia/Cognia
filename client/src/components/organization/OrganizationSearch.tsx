@@ -34,6 +34,8 @@ function mapAnswerJobCitations(
     memoryId: citation.memory_id,
     url: citation.url || undefined,
     sourceType: citation.source_type || undefined,
+    authorEmail: citation.author_email || undefined,
+    capturedAt: citation.captured_at || undefined,
   }))
 }
 
@@ -417,7 +419,9 @@ export function OrganizationSearch() {
           layout
         >
           <span>[FILTER] {activeFilterLabel}</span>
-          {submittedQuery && <span>Applied to "{submittedQuery}"</span>}
+          <div className="flex flex-wrap items-center gap-2">
+            {submittedQuery && <span>Applied to "{submittedQuery}"</span>}
+          </div>
         </motion.div>
       </motion.div>
 
@@ -490,13 +494,30 @@ export function OrganizationSearch() {
                                   citation.sourceType
                                 )
                               }
-                              className="rounded border border-gray-200 px-2 py-1 text-xs font-mono text-gray-600 transition-colors hover:border-gray-900 hover:text-gray-900"
+                              className="flex flex-col items-start rounded border border-gray-200 px-2 py-1 text-left text-xs font-mono text-gray-600 transition-colors hover:border-gray-900 hover:text-gray-900"
                               variants={fadeUpVariants}
                               whileHover={{ y: -2, scale: 1.01 }}
                               whileTap={{ scale: 0.98 }}
                             >
-                              [{citation.indices.join(", ")}]{" "}
-                              {citation.documentName || "Source"}
+                              <span>
+                                [{citation.indices.join(", ")}]{" "}
+                                {citation.documentName || "Source"}
+                              </span>
+                              {citation.authorEmail && (
+                                <span className="mt-0.5 truncate text-[10px] font-mono text-gray-500">
+                                  captured by{" "}
+                                  {citation.authorEmail.split("@")[0]}
+                                  {citation.capturedAt && (
+                                    <>
+                                      {" "}
+                                      ·{" "}
+                                      {new Date(
+                                        citation.capturedAt
+                                      ).toLocaleDateString()}
+                                    </>
+                                  )}
+                                </span>
+                              )}
                             </motion.button>
                           ))}
                         </motion.div>
@@ -703,6 +724,92 @@ export function OrganizationSearch() {
               </motion.div>
             )
           })}
+
+          {visibleResults.length > 0 && (
+            <motion.div
+              initial="initial"
+              animate="animate"
+              variants={fadeUpVariants}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-xs font-mono uppercase tracking-wider text-gray-500">
+                  [RESULTS]
+                </span>
+                <span className="text-xs font-mono text-gray-400">
+                  {visibleResults.length} source
+                  {visibleResults.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {visibleResults.map((result) => {
+                  const tags = Array.isArray(result.metadata?.tags)
+                    ? (result.metadata?.tags as string[]).filter(
+                        (tag) => typeof tag === "string"
+                      )
+                    : []
+
+                  return (
+                    <div
+                      key={result.memoryId}
+                      className="border border-gray-200 bg-white p-4"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-mono uppercase tracking-wide text-gray-400">
+                              [{result.sourceType}]
+                            </span>
+                            <h3 className="truncate text-sm font-medium text-gray-900">
+                              {result.documentName || result.title || "Source"}
+                            </h3>
+                          </div>
+
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-mono text-gray-400">
+                            {result.pageNumber && (
+                              <span>Page {result.pageNumber}</span>
+                            )}
+                            <span>Score {result.score.toFixed(3)}</span>
+                          </div>
+
+                          {tags.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {tags.map((tag) => (
+                                <span
+                                  key={`${result.memoryId}-${tag}`}
+                                  className="border border-gray-200 px-2 py-1 text-[10px] font-mono uppercase tracking-wide text-gray-500"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          <p className="mt-3 text-sm leading-relaxed text-gray-600">
+                            {result.highlightText || result.contentPreview}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleCitationClick(
+                              result.memoryId,
+                              result.url,
+                              result.sourceType
+                            )
+                          }
+                          className="border border-gray-300 px-3 py-2 text-xs font-mono text-gray-700 transition-colors hover:border-gray-900 hover:text-gray-900"
+                        >
+                          Open Source
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </motion.div>
+          )}
 
           {results.results.length === 0 && (
             <div className="border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500">

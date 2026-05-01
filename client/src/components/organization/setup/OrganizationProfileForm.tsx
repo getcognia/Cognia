@@ -64,7 +64,10 @@ export function OrganizationProfileForm({
       organization.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
   })
 
-  const handleChange = (field: keyof UpdateProfileRequest, value: string) => {
+  function handleChange(
+    field: keyof UpdateProfileRequest,
+    value: UpdateProfileRequest[keyof UpdateProfileRequest]
+  ) {
     setFormData((prev) => ({ ...prev, [field]: value }))
     setError("")
   }
