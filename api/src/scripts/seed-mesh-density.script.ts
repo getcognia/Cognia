@@ -32,6 +32,46 @@ interface MemoryDef {
   url?: string
 }
 
+const slugify = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60)
+
+const hexId = (seed: number, len = 32): string => {
+  const chars = 'abcdef0123456789'
+  let s = ''
+  for (let i = 0; i < len; i++) s += chars[(seed * 7 + i * 13 + 31) % 16]
+  return s
+}
+
+// Per-source realistic URL fallback. Used when a memory doesn't have an
+// explicit url. The shape of each URL matches the real product's link format.
+const buildFallbackUrl = (m: MemoryDef, i: number): string => {
+  const s = slugify(m.title)
+  switch (m.source) {
+    case 'slack':
+      return `https://blitlabs.slack.com/archives/C0POLARIS/p${1730000000000 + i * 137}${(i % 1000).toString().padStart(3, '0')}`
+    case 'notion':
+      return `https://www.notion.so/blitlabs/${s}-${hexId(i + 17, 32)}`
+    case 'github':
+      return `https://github.com/blitlabs/canvas/issues/${500 + i}`
+    case 'linear':
+      return `https://linear.app/blit/issue/BLIT-${100 + i}`
+    case 'gmail':
+      return `https://mail.google.com/mail/u/0/#inbox/${hexId(i + 41, 16)}`
+    case 'google_docs':
+      return `https://docs.google.com/document/d/1${hexId(i + 53, 30)}/edit`
+    case 'loom':
+      return `https://www.loom.com/share/${hexId(i + 71, 32)}`
+    case 'web':
+      return `https://news.ycombinator.com/item?id=${30000000 + i * 17}`
+    default:
+      return `https://www.notion.so/blitlabs/${s}`
+  }
+}
+
 // ── 1. Polaris technical & product (60) ─────────────────────────────────────
 const POLARIS: MemoryDef[] = [
   {
@@ -3214,12 +3254,7 @@ async function main(): Promise<void> {
         memory_type: 'REFERENCE',
         title: m.title,
         content: m.content,
-        url:
-          m.url ??
-          `https://example.com/${m.source}/${m.title
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .slice(0, 60)}`,
+        url: m.url ?? buildFallbackUrl(m, i),
         timestamp: BigInt(ts),
         created_at: new Date(ts),
         last_accessed: new Date(ts),
