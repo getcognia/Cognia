@@ -126,7 +126,9 @@ export async function getOrganizationDocuments(
   slug: string
 ): Promise<Document[]> {
   requireAuthToken()
-  const response = await getRequest(`${baseUrl}/${slug}/documents`)
+  // API defaults to limit=50 if not specified — request more so the
+  // documents tab shows the full list for typical workspaces.
+  const response = await getRequest(`${baseUrl}/${slug}/documents?limit=500`)
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to fetch documents")
   }
