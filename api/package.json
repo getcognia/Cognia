@@ -41,6 +41,7 @@
     "backfill:search": "node -r ts-node/register src/scripts/backfill-search-index.script.ts",
     "seed:polaris": "node -r ts-node/register src/scripts/seed-polaris-handover.script.ts",
     "seed:mesh": "node -r ts-node/register src/scripts/seed-mesh-density.script.ts",
+    "seed:team": "node -r ts-node/register src/scripts/seed-team-activity.script.ts",
     "check": "npm run lint:fix && npm run format && npm run build"
   },
   "keywords": [

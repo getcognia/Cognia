@@ -5,6 +5,34 @@
 
 > An AI-powered knowledge graph for capturing, organizing, and retrieving your digital context.
 
+## Live demo
+
+A working deployment of Cognia is hosted with seeded demo data so you can try the product without setting up a local stack.
+
+| | |
+|---|---|
+| **App** | https://cogniahq.tech |
+| **API** | https://api.cogniahq.tech |
+| **Workspace** | Blit Labs (slug `blit-labs`) |
+
+**Demo accounts** (all share the same password, no setup required):
+
+| Email | Role | Persona |
+|---|---|---|
+| `alex@blitlabs.com` | Admin | New engineer who took over Project Polaris |
+| `sarah@blitlabs.com` | Editor | Ex-tech-lead (left the company) |
+| `bob@blitlabs.com` | Editor | Ex-backend (on sabbatical) |
+| `priya.m@blitlabs.com` | Editor | Senior engineer (just joined) |
+| `marco@blitlabs.com` | Editor | Mid-level engineer |
+| `maya@blitlabs.com` | Editor | Designer |
+| `jordan@blitlabs.com` | Editor | PM |
+| `aisha@blitlabs.com` | Editor | Customer success |
+| `ravi@blitlabs.com` | Admin | Founder / CEO |
+| `diana@blitlabs.com` | Editor | Operations |
+
+**Password (all accounts):** `DemoPassword2026!`
+
+The Blit Labs workspace is preloaded with ~370 memories spanning a realistic team narrative (Project Polaris handover, customer interactions, hiring pipeline, engineering decisions, articles read), plus comments, shared memories, saved searches, and tags so the platform looks lived-in. Try a search like `"I just joined and need to ship Project Polaris in 1 week — what do I need to know?"` to see grounded, cited answers.
 
 ## Quick Start
 
