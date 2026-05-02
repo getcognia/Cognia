@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useAuth } from "@/contexts/auth.context"
 import { useOrganization } from "@/contexts/organization.context"
 import {
   getOrgIntegrationSettings,
@@ -32,7 +31,6 @@ const getErrorMessage = (error: unknown, fallback: string) =>
 
 export function Organization() {
   const navigate = useNavigate()
-  const { accountType, isLoading: authLoading } = useAuth()
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const {
     organizations,
@@ -108,11 +106,12 @@ export function Organization() {
     }
   }, [navigate])
 
-  useEffect(() => {
-    if (!authLoading && accountType === "PERSONAL") {
-      navigate("/memories")
-    }
-  }, [accountType, authLoading, navigate])
+  // accountType ("PERSONAL" vs "ORGANIZATION") is a User-level flag set at
+  // signup. It doesn't gate workspace access — a PERSONAL user can still
+  // belong to one or more team workspaces, and the OrgSwitcher is the
+  // authoritative way to move between Personal and Workspace views. So this
+  // page is reachable for every authenticated user; the empty/selector
+  // states below handle the "no org yet" / "pick an org" cases.
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -121,10 +120,6 @@ export function Organization() {
   }, [isAuthenticated, loadOrganizations])
 
   if (!isAuthenticated) {
-    return null
-  }
-
-  if (accountType === "PERSONAL") {
     return null
   }
 

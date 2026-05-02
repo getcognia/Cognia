@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react"
-import { useAuth } from "@/contexts/auth.context"
 import { useOrganization } from "@/contexts/organization.context"
 import {
   onboardingService,
@@ -20,7 +19,6 @@ import { PageHeader } from "@/components/shared/PageHeader"
 
 export const Memories: React.FC = () => {
   const navigate = useNavigate()
-  const { accountType, isLoading: authLoading } = useAuth()
   const { organizations } = useOrganization()
   const [isAuthenticated, setIsAuthenticated] = useState(false)
 
@@ -33,12 +31,10 @@ export const Memories: React.FC = () => {
     }
   }, [navigate])
 
-  // Redirect ORGANIZATION users to their dashboard
-  useEffect(() => {
-    if (!authLoading && accountType === "ORGANIZATION") {
-      navigate("/organization")
-    }
-  }, [accountType, authLoading, navigate])
+  // accountType is no longer a hard gate: a user with account_type
+  // ORGANIZATION can still want the Personal view, and a PERSONAL user can
+  // belong to a team workspace. The OrgSwitcher in the header is the
+  // canonical way to move between Personal and Workspace views.
 
   const similarityThreshold = 0.3
   const { memories, totalMemoryCount } = useMemories()
