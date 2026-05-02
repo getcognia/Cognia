@@ -84,6 +84,12 @@ async function buildScripts(watch = false) {
   const define = {
     'process.env.NODE_ENV': JSON.stringify(nodeEnv),
     'import.meta.env.NODE_ENV': JSON.stringify(nodeEnv),
+    // Fallback so any `import.meta.env.<X>` reference left over in source
+    // never lands in the bundle as a raw `import.meta` token. Content
+    // scripts are loaded as classic scripts (not modules) and `import.meta`
+    // is a parse-time SyntaxError there. Each EXT_* key actually used is
+    // overridden below, so the fallback only catches new/unused keys.
+    'import.meta.env': '{}',
   }
 
   for (const [key, value] of Object.entries(envVars)) {
