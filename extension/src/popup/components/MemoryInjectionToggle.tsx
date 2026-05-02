@@ -1,4 +1,6 @@
 import React from 'react'
+import { Switch } from '@/components/ui/switch'
+import { SparklesIcon } from './Icons'
 
 interface MemoryInjectionToggleProps {
   memoryInjectionEnabled: boolean
@@ -12,26 +14,27 @@ export const MemoryInjectionToggle: React.FC<MemoryInjectionToggleProps> = ({
   onToggle,
 }) => {
   return (
-    <div className="border border-gray-200 bg-white p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex-1">
-          <div className="text-sm font-medium text-black mb-0.5">Memory Injection</div>
-          <div className="text-xs text-gray-600">
-            {memoryInjectionEnabled ? 'Enabled' : 'Disabled'}
-          </div>
+    <div className="flex items-start justify-between gap-4 px-4 py-3">
+      <div className="flex items-start gap-3 min-w-0">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-surface-subtle text-foreground">
+          <SparklesIcon size={13} />
         </div>
-        <button
-          onClick={onToggle}
-          disabled={isLoading}
-          className={`px-4 py-1.5 text-xs font-medium border transition-colors ${
-            memoryInjectionEnabled
-              ? 'border-black bg-black text-white hover:bg-gray-800'
-              : 'border-gray-300 bg-white text-black hover:bg-gray-50'
-          }`}
-        >
-          {isLoading ? '...' : memoryInjectionEnabled ? 'Disable' : 'Enable'}
-        </button>
+        <div className="flex flex-col min-w-0">
+          <label htmlFor="memory-switch" className="text-[13px] font-medium text-foreground">
+            Memory injection
+          </label>
+          <span className="text-[11px] leading-snug text-muted-foreground">
+            Add saved memories to AI prompts
+          </span>
+        </div>
       </div>
+      <Switch
+        id="memory-switch"
+        checked={memoryInjectionEnabled}
+        disabled={isLoading}
+        onCheckedChange={onToggle}
+        aria-label="Toggle memory injection"
+      />
     </div>
   )
 }

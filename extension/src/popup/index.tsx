@@ -5,8 +5,41 @@ import { StatusSection } from './components/StatusSection'
 import { ExtensionToggle } from './components/ExtensionToggle'
 import { MemoryInjectionToggle } from './components/MemoryInjectionToggle'
 import { BlockedWebsites } from './components/BlockedWebsites'
+import { ExternalLinkIcon } from './components/Icons'
 import { useExtensionSettings } from './hooks/useExtensionSettings'
 import { useStatus } from './hooks/useStatus'
+
+const DASHBOARD_URL = 'https://cognia.com'
+
+const Header: React.FC = () => {
+  const openDashboard = () => {
+    window.open(DASHBOARD_URL, '_blank', 'noopener,noreferrer')
+  }
+
+  return (
+    <header className="flex items-center justify-between gap-3 px-4 pt-4 pb-3">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className="relative flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
+          <span className="font-mono text-[15px] font-semibold leading-none">C</span>
+          <span className="absolute -bottom-1 -right-1 h-2 w-2 rounded-full border-2 border-background bg-success" />
+        </div>
+        <div className="flex flex-col min-w-0">
+          <span className="font-editorial text-[18px] leading-none text-foreground">Cognia</span>
+          <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
+            Memory · v0.1
+          </span>
+        </div>
+      </div>
+      <button
+        onClick={openDashboard}
+        aria-label="Open Cognia dashboard"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ExternalLinkIcon size={14} />
+      </button>
+    </header>
+  )
+}
 
 const Popup: React.FC = () => {
   const {
@@ -24,25 +57,12 @@ const Popup: React.FC = () => {
   const { isConnected, isAuthenticated, isCheckingHealth, lastCaptureTime } = useStatus()
 
   return (
-    <div
-      className="w-80 bg-white text-black font-primary"
-      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}
-    >
-      <div className="border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-black text-white flex items-center justify-center font-bold text-base font-mono">
-            C
-          </div>
-          <div className="flex flex-col">
-            <span className="text-base font-bold text-black">Cognia</span>
-            <span className="text-xs text-gray-600 font-mono -mt-0.5">
-              Remember what the web showed you
-            </span>
-          </div>
-        </div>
-      </div>
+    <div className="w-[360px] bg-background text-foreground font-primary">
+      <Header />
 
-      <div className="p-4 space-y-4">
+      <div className="border-t border-border" />
+
+      <main className="px-4 pt-3.5 pb-4 space-y-3.5">
         <StatusSection
           isConnected={isConnected}
           isAuthenticated={isAuthenticated}
@@ -50,17 +70,25 @@ const Popup: React.FC = () => {
           lastCaptureTime={lastCaptureTime}
         />
 
-        <ExtensionToggle
-          extensionEnabled={extensionEnabled}
-          isLoading={isLoading}
-          onToggle={toggleExtension}
-        />
-
-        <MemoryInjectionToggle
-          memoryInjectionEnabled={memoryInjectionEnabled}
-          isLoading={isLoading}
-          onToggle={toggleMemoryInjection}
-        />
+        <section className="rounded-lg border border-border bg-card">
+          <header className="flex items-center justify-between px-4 pt-3 pb-1">
+            <h3 className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              Controls
+            </h3>
+          </header>
+          <div className="divide-y divide-border">
+            <ExtensionToggle
+              extensionEnabled={extensionEnabled}
+              isLoading={isLoading}
+              onToggle={toggleExtension}
+            />
+            <MemoryInjectionToggle
+              memoryInjectionEnabled={memoryInjectionEnabled}
+              isLoading={isLoading}
+              onToggle={toggleMemoryInjection}
+            />
+          </div>
+        </section>
 
         <BlockedWebsites
           blockedWebsites={blockedWebsites}
@@ -69,7 +97,19 @@ const Popup: React.FC = () => {
           onRemove={removeBlockedWebsite}
           onBlockCurrentDomain={blockCurrentDomain}
         />
-      </div>
+      </main>
+
+      <footer className="border-t border-border px-4 py-2.5 flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          Local-first · Encrypted
+        </span>
+        <button
+          onClick={() => window.open(DASHBOARD_URL, '_blank', 'noopener,noreferrer')}
+          className="font-mono text-[10px] uppercase tracking-wider text-foreground hover:underline"
+        >
+          Dashboard ↗
+        </button>
+      </footer>
     </div>
   )
 }
