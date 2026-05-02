@@ -48,7 +48,9 @@ const StatusDot: React.FC<{ tone: Tone; pulse?: boolean }> = ({ tone, pulse }) =
   const cls = toneClasses[tone]
   return (
     <span className="relative inline-flex h-2 w-2 shrink-0">
-      {pulse && <span className={cn('absolute inset-0 rounded-full animate-pulse-ring', cls.ring)} />}
+      {pulse && (
+        <span className={cn('absolute inset-0 rounded-full animate-pulse-ring', cls.ring)} />
+      )}
       <span className={cn('relative inline-flex h-2 w-2 rounded-full', cls.dot)} />
     </span>
   )

@@ -157,7 +157,8 @@ export const PageHeader = () => {
     const prefixes = item.matchPrefixes ?? [item.path]
     return prefixes.some(
       (prefix) =>
-        location.pathname === prefix || location.pathname.startsWith(prefix + "/")
+        location.pathname === prefix ||
+        location.pathname.startsWith(prefix + "/")
     )
   }
 
