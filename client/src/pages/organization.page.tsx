@@ -151,7 +151,7 @@ export function Organization() {
   if (!currentOrganization && organizations.length === 0) {
     return (
       <div className="min-h-screen bg-white">
-        <PageHeader pageName="Workspace" />
+        <PageHeader />
 
         <motion.div
           className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20"
@@ -244,7 +244,7 @@ export function Organization() {
   if (!currentOrganization) {
     return (
       <div className="min-h-screen bg-white">
-        <PageHeader pageName="Workspace" />
+        <PageHeader />
 
         <motion.div
           className="max-w-lg mx-auto px-4 sm:px-6 lg:px-8 py-16"
@@ -317,7 +317,7 @@ export function Organization() {
   // Main organization view
   return (
     <div className="min-h-screen bg-white">
-      <PageHeader pageName="Workspace" />
+      <PageHeader />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         <motion.div

@@ -58,20 +58,29 @@ export function OrgSwitcher({
   }
 
   const triggerLabel = currentOrganization?.name ?? PERSONAL_LABEL
+  const isAdmin = currentOrganization?.userRole === "ADMIN"
 
   return (
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
-            className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono text-gray-600 hover:text-gray-900 hover:bg-gray-100 border border-gray-300 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3 h-8 text-xs font-mono text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors disabled:opacity-50"
             disabled={isLoading}
             aria-label="Switch workspace"
           >
             <span className="max-w-[140px] truncate">
               {isLoading ? "Loading..." : triggerLabel}
             </span>
-            <span className="text-gray-400">▼</span>
+            {isAdmin && (
+              <span
+                className="px-1.5 py-px text-[9px] font-mono uppercase tracking-wider text-gray-500 bg-gray-100 border border-gray-200"
+                title="You are an admin of this workspace"
+              >
+                Admin
+              </span>
+            )}
+            <span className="text-gray-400 text-[10px]">▾</span>
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent

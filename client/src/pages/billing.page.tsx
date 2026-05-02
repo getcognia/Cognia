@@ -210,7 +210,7 @@ export function Billing() {
   if (!slug) {
     return (
       <div className="min-h-screen bg-white">
-        <PageHeader pageName="Billing" />
+        <PageHeader />
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
           <h1 className="text-2xl font-light font-editorial text-gray-900">
             No workspace selected
@@ -242,7 +242,7 @@ export function Billing() {
 
   return (
     <div className="min-h-screen bg-white">
-      <PageHeader pageName="Billing" />
+      <PageHeader />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         <motion.div

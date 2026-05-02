@@ -232,7 +232,7 @@ export const Integrations: React.FC = () => {
   if (authLoading || isLoading) {
     return (
       <div className="min-h-screen bg-white">
-        <PageHeader pageName="Integrations" />
+        <PageHeader />
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <div className="flex items-center justify-center">
             <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
@@ -247,7 +247,7 @@ export const Integrations: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-white">
-      <PageHeader pageName="Integrations" />
+      <PageHeader />
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}

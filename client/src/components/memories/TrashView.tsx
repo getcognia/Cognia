@@ -60,7 +60,7 @@ export const TrashView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-white">
-      <PageHeader pageName="Trash" />
+      <PageHeader />
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
         <button

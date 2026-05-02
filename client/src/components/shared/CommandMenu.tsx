@@ -134,8 +134,14 @@ const CommandMenuComponent = () => {
       }
     }
 
+    const handleOpenEvent = () => setOpen(true)
+
     document.addEventListener("keydown", down)
-    return () => document.removeEventListener("keydown", down)
+    window.addEventListener("cognia:open-command-menu", handleOpenEvent)
+    return () => {
+      document.removeEventListener("keydown", down)
+      window.removeEventListener("cognia:open-command-menu", handleOpenEvent)
+    }
   }, [navigate, location.pathname, open])
 
   return (
