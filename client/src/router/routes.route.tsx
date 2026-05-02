@@ -1,9 +1,6 @@
 import { lazy, Suspense, useRef } from "react"
 import { useAuth } from "@/contexts/auth.context"
-import { AnimatePresence } from "framer-motion"
-import { Navigate, Route, Routes, useLocation } from "react-router-dom"
-
-import { AnimatedPage } from "@/components/shared/site-motion"
+import { Navigate, Route, Routes } from "react-router-dom"
 
 const Landing = lazy(() =>
   import("@/pages/landing.page").then((module) => ({ default: module.Landing }))
@@ -150,46 +147,40 @@ const AuthRedirectLanding = () => {
 }
 
 const AppRoutes = () => {
-  const location = useLocation()
-
   return (
     <Suspense fallback={<LoadingFallback />}>
-      <AnimatePresence mode="wait" initial={false}>
-        <AnimatedPage key={location.pathname}>
-          <Routes location={location}>
-            <Route path="/" element={<AuthRedirectLanding />} />
-            <Route path="/pricing" element={<Pricing />} />
+      <Routes>
+        <Route path="/" element={<AuthRedirectLanding />} />
+        <Route path="/pricing" element={<Pricing />} />
 
-            {/* Public trust & legal pages */}
-            <Route path="/security" element={<Security />} />
-            <Route path="/security/bug-bounty" element={<BugBounty />} />
-            <Route path="/trust" element={<Trust />} />
-            <Route path="/privacy" element={<Privacy />} />
-            <Route path="/terms" element={<Terms />} />
-            <Route path="/subprocessors" element={<SubprocessorsPage />} />
-            <Route path="/dpa" element={<DPAPage />} />
+        {/* Public trust & legal pages */}
+        <Route path="/security" element={<Security />} />
+        <Route path="/security/bug-bounty" element={<BugBounty />} />
+        <Route path="/trust" element={<Trust />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/subprocessors" element={<SubprocessorsPage />} />
+        <Route path="/dpa" element={<DPAPage />} />
 
-            {/* App routes */}
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Login />} />
-            <Route path="/auth/verify-email" element={<VerifyEmail />} />
-            <Route path="/auth/magic" element={<AuthMagic />} />
-            <Route path="/memories" element={<Memories />} />
-            <Route path="/memories/v2" element={<MemoriesV2 />} />
-            <Route path="/memories/trash" element={<MemoriesTrash />} />
-            <Route path="/docs" element={<Docs />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/profile" element={<Profile />} />
-            <Route path="/organization" element={<Organization />} />
-            <Route path="/integrations" element={<Integrations />} />
-            <Route path="/mesh-showcase" element={<MeshShowcase />} />
-            <Route path="/org-admin/:slug" element={<OrgAdmin />} />
-            <Route path="/billing" element={<Billing />} />
+        {/* App routes */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Login />} />
+        <Route path="/auth/verify-email" element={<VerifyEmail />} />
+        <Route path="/auth/magic" element={<AuthMagic />} />
+        <Route path="/memories" element={<Memories />} />
+        <Route path="/memories/v2" element={<MemoriesV2 />} />
+        <Route path="/memories/trash" element={<MemoriesTrash />} />
+        <Route path="/docs" element={<Docs />} />
+        <Route path="/analytics" element={<Analytics />} />
+        <Route path="/profile" element={<Profile />} />
+        <Route path="/organization" element={<Organization />} />
+        <Route path="/integrations" element={<Integrations />} />
+        <Route path="/mesh-showcase" element={<MeshShowcase />} />
+        <Route path="/org-admin/:slug" element={<OrgAdmin />} />
+        <Route path="/billing" element={<Billing />} />
 
-            <Route path="*" element={<AuthRedirectLanding />} />
-          </Routes>
-        </AnimatedPage>
-      </AnimatePresence>
+        <Route path="*" element={<AuthRedirectLanding />} />
+      </Routes>
     </Suspense>
   )
 }
