@@ -219,12 +219,17 @@ router.post('/register', registerRateLimiter, async (req: Request, res: Response
         email,
         password_hash,
         account_type: account_type as 'PERSONAL' | 'ORGANIZATION',
+        // Email verification is currently a no-op: the email sender is a stub
+        // (no Resend/Postmark wired up). Auto-verify so users aren't stranded
+        // by a UI banner or future gate. Remove this line when a real email
+        // provider is plugged in and a verify-on-click flow is desired.
+        email_verified_at: new Date(),
       },
     })
 
-    // Issue and send a verify-email token for the freshly created user
-    const { token: vToken } = await issueEmailVerificationToken(user.id, 'verify_email')
-    await sendVerificationEmail(user.email!, vToken, 'verify_email').catch(() => {})
+    // Verification email is intentionally disabled — see note above.
+    // const { token: vToken } = await issueEmailVerificationToken(user.id, 'verify_email')
+    // await sendVerificationEmail(user.email!, vToken, 'verify_email').catch(() => {})
 
     // Kick off sample-workspace seeding asynchronously so registration is not blocked
     seedSampleWorkspace(user.id).catch(err =>

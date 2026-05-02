@@ -78,8 +78,8 @@ export const MemoriesEmptyState: React.FC<MemoriesEmptyStateProps> = ({
         <>
           <p className="text-sm text-gray-600 mb-8 leading-relaxed">
             Cognia builds a photographic memory of the web as you browse.
-            Install the extension to start capturing pages, links, and context
-            — or add a memory manually.
+            Install the extension to start capturing pages, links, and context —
+            or add a memory manually.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
             <button

@@ -77,7 +77,7 @@ export async function sendVerificationEmail(
       ? '/auth/magic'
       : purpose === 'password_reset'
         ? '/auth/reset'
-        : '/auth/verify'
+        : '/auth/verify-email'
   const url = `${baseUrl}${path}?token=${token}`
   logger.log('[email][stub] would send', { to: email, purpose, url })
 }

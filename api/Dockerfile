@@ -38,6 +38,11 @@ COPY src ./src
 RUN npx prisma generate
 RUN npm run build
 
+# tsc only compiles .ts files — non-code assets (sample-memories.json,
+# template files) live under src/data and need to be copied into dist so the
+# runtime resolves __dirname/.. /data/sample-memories.json correctly.
+RUN if [ -d src/data ]; then mkdir -p dist/data && cp -R src/data/. dist/data/; fi
+
 ############################
 # Stage 3 — runtime
 ############################

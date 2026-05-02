@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { EmailVerificationBanner } from "@/components/auth/EmailVerificationBanner"
+// import { EmailVerificationBanner } from "@/components/auth/EmailVerificationBanner"
 import { OrgSwitcher } from "@/components/shared/OrgSwitcher"
 
 interface UserMenuProps {
@@ -229,7 +229,11 @@ export const PageHeader = () => {
         </div>
       </header>
       <div className="h-14" aria-hidden="true" />
-      <EmailVerificationBanner />
+      {/* Email verification banner — disabled until the email provider is
+          wired up. The sender is currently a stub (api/src/services/auth/
+          email-verification.service.ts) so the banner only nags users with
+          no way to actually verify. Re-enable when Resend/Postmark is live. */}
+      {/* <EmailVerificationBanner /> */}
     </>
   )
 }
