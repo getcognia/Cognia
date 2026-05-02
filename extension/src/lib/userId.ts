@@ -77,9 +77,6 @@ async function getTokenFromCookie(): Promise<string | null> {
       env.API_BASE_URL,
       `${env.API_BASE_URL}/api`,
       `${env.API_BASE_URL}/`,
-      `http://127.0.0.1:3000`,
-      `http://127.0.0.1:3000/api`,
-      `http://127.0.0.1:3000/`,
     ]
 
     for (const cookieName of cookieNames) {
