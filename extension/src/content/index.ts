@@ -13,6 +13,26 @@ import { initEmailDraftPill } from './email/email-draft'
 import { initAIChatIntegration } from './ai-chat/chat-integration'
 import { startSearchResultHighlighting } from './highlighting/search-result-highlighter'
 
+// Announces the extension to the page so first-party web apps (cogniahq.tech)
+// can swap their "Install the extension" CTA for an installed-state UI.
+// Read from the page via document.documentElement.dataset.cogniaExtension or
+// by listening for the cognia:extension-ready CustomEvent.
+function announceExtensionPresence(): void {
+  try {
+    const version =
+      typeof chrome !== 'undefined' && chrome.runtime?.getManifest
+        ? chrome.runtime.getManifest().version
+        : ''
+    document.documentElement.setAttribute('data-cognia-extension', version || 'installed')
+    document.dispatchEvent(
+      new CustomEvent('cognia:extension-ready', { detail: { version } })
+    )
+  } catch {
+    // Best-effort signal only. Failures here must never break the page.
+  }
+}
+announceExtensionPresence()
+
 function isLocalhost(): boolean {
   const hostname = window.location.hostname
   return (

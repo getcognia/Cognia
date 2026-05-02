@@ -1,5 +1,7 @@
 import React from "react"
 
+import { useExtensionInstalled } from "@/hooks/use-extension-installed"
+
 interface MemoriesEmptyStateProps {
   onInstallExtension?: () => void
   onCreateMemory?: () => void
@@ -8,12 +10,15 @@ interface MemoriesEmptyStateProps {
 /**
  * Empty state shown on the Memories page when the user has no memories yet.
  * Surfaces the two primary capture paths: install the extension or create a
- * memory manually.
+ * memory manually. When the extension is detected, the install CTA is
+ * replaced with a "Cognia is running" affordance.
  */
 export const MemoriesEmptyState: React.FC<MemoriesEmptyStateProps> = ({
   onInstallExtension,
   onCreateMemory,
 }) => {
+  const extensionInstalled = useExtensionInstalled()
+
   const handleInstall =
     onInstallExtension ||
     (() =>
@@ -43,27 +48,57 @@ export const MemoriesEmptyState: React.FC<MemoriesEmptyStateProps> = ({
       <h2 className="text-2xl font-light font-editorial text-gray-900 mb-2">
         No memories yet
       </h2>
-      <p className="text-sm text-gray-600 mb-8 leading-relaxed">
-        Cognia builds a photographic memory of the web as you browse. Install
-        the extension to start capturing pages, links, and context — or add a
-        memory manually.
-      </p>
-      <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-        <button
-          onClick={handleInstall}
-          className="px-5 py-2.5 text-sm font-medium bg-gray-900 text-white hover:bg-black transition-colors"
-        >
-          Install the extension
-        </button>
-        {onCreateMemory && (
-          <button
-            onClick={onCreateMemory}
-            className="px-5 py-2.5 text-sm font-medium border border-gray-300 text-gray-700 hover:border-black hover:bg-gray-50 transition-colors"
-          >
-            Add a memory
-          </button>
-        )}
-      </div>
+      {extensionInstalled ? (
+        <>
+          <div className="inline-flex items-center gap-2 mb-4 px-3 py-1 rounded-full border border-emerald-200 bg-emerald-50">
+            <span className="relative inline-flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-xs font-mono uppercase tracking-wider text-emerald-700">
+              Extension active
+            </span>
+          </div>
+          <p className="text-sm text-gray-600 mb-8 leading-relaxed">
+            Cognia is running. Start browsing — pages you read will be captured
+            automatically. You can also add a memory by hand.
+          </p>
+          {onCreateMemory && (
+            <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+              <button
+                onClick={onCreateMemory}
+                className="px-5 py-2.5 text-sm font-medium bg-gray-900 text-white hover:bg-black transition-colors"
+              >
+                Add a memory
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-gray-600 mb-8 leading-relaxed">
+            Cognia builds a photographic memory of the web as you browse.
+            Install the extension to start capturing pages, links, and context
+            — or add a memory manually.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            <button
+              onClick={handleInstall}
+              className="px-5 py-2.5 text-sm font-medium bg-gray-900 text-white hover:bg-black transition-colors"
+            >
+              Install the extension
+            </button>
+            {onCreateMemory && (
+              <button
+                onClick={onCreateMemory}
+                className="px-5 py-2.5 text-sm font-medium border border-gray-300 text-gray-700 hover:border-black hover:bg-gray-50 transition-colors"
+              >
+                Add a memory
+              </button>
+            )}
+          </div>
+        </>
+      )}
       <p className="text-xs text-gray-400 mt-6 font-mono">
         Or visit /pricing to see what each plan includes.
       </p>

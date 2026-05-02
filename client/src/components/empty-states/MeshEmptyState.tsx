@@ -1,5 +1,7 @@
 import React from "react"
 
+import { useExtensionInstalled } from "@/hooks/use-extension-installed"
+
 interface MeshEmptyStateProps {
   onInstallExtension?: () => void
 }
@@ -7,10 +9,13 @@ interface MeshEmptyStateProps {
 /**
  * Empty state for the memory mesh visualization page when no nodes exist.
  * Mirrors the MemoriesEmptyState style but tailored for the graph view.
+ * Hides the install CTA when the extension is already detected.
  */
 export const MeshEmptyState: React.FC<MeshEmptyStateProps> = ({
   onInstallExtension,
 }) => {
+  const extensionInstalled = useExtensionInstalled()
+
   const handleInstall =
     onInstallExtension ||
     (() =>
@@ -42,16 +47,38 @@ export const MeshEmptyState: React.FC<MeshEmptyStateProps> = ({
       <h2 className="text-2xl font-light font-editorial text-gray-900 mb-2">
         Your memory mesh is empty
       </h2>
-      <p className="text-sm text-gray-600 mb-8 leading-relaxed">
-        The mesh comes alive once you've captured a few memories. Connections
-        and clusters form automatically as Cognia learns what matters to you.
-      </p>
-      <button
-        onClick={handleInstall}
-        className="px-5 py-2.5 text-sm font-medium bg-gray-900 text-white hover:bg-black transition-colors"
-      >
-        Install the extension
-      </button>
+      {extensionInstalled ? (
+        <>
+          <div className="inline-flex items-center gap-2 mb-4 px-3 py-1 rounded-full border border-emerald-200 bg-emerald-50">
+            <span className="relative inline-flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-xs font-mono uppercase tracking-wider text-emerald-700">
+              Extension active
+            </span>
+          </div>
+          <p className="text-sm text-gray-600 mb-8 leading-relaxed">
+            Cognia is running. The mesh fills in once you've captured a few
+            pages — connections and clusters form automatically as patterns
+            emerge.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-gray-600 mb-8 leading-relaxed">
+            The mesh comes alive once you've captured a few memories.
+            Connections and clusters form automatically as Cognia learns what
+            matters to you.
+          </p>
+          <button
+            onClick={handleInstall}
+            className="px-5 py-2.5 text-sm font-medium bg-gray-900 text-white hover:bg-black transition-colors"
+          >
+            Install the extension
+          </button>
+        </>
+      )}
     </div>
   )
 }
