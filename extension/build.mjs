@@ -100,6 +100,8 @@ async function buildScripts(watch = false) {
       resolve(srcDir, 'popup/index.tsx'),
     ],
     outdir: outDir,
+    outbase: srcDir,
+    entryNames: '[dir]',
     bundle: true,
     format: 'esm',
     platform: 'browser',

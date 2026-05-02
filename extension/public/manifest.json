@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Cognia",
   "version": "0.1.0",
-  "description": "Blockchain-verified, AI-powered knowledge graph for capturing and retrieving your digital context.",
+  "description": "AI-powered knowledge graph for capturing and retrieving your digital context.",
   "icons": {
     "16": "icon-16.png",
     "32": "icon-32.png",
@@ -22,7 +22,8 @@
     }
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
